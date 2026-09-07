@@ -61,8 +61,8 @@
     [data-playing="true"] #artAmbience { opacity: 0.8; }
     @media (min-width: 640px) { #artAmbience { width: 500px; height: 500px; } }
 
-    #barInner { transition: width 100ms linear; }
-    #barInner.reset-animation { transition: width 400ms cubic-bezier(.16,1,.3,1); }
+    #barInner { transition: width 100ms linear, background-color 800ms ease; }
+    #barInner.reset-animation { transition: width 400ms cubic-bezier(.16,1,.3,1), background-color 800ms ease; }
     
     #liveCanvas {
       position: absolute; inset: 0; width: 100%; height: 100%;
@@ -77,8 +77,8 @@
     #lyricsScroll { transition: transform 400ms cubic-bezier(0.25, 1, 0.5, 1); }
     .lyric-line { transition: all 300ms cubic-bezier(0.25, 1, 0.5, 1); }
     
-    /* Smooth transition for dynamic background gradient */
     #card { transition: background 800ms ease-in-out; }
+    #volumeSlider { transition: accent-color 800ms ease; }
 
     :fullscreen #fs { display: none !important; }
     :-webkit-full-screen #fs { display: none !important; }
@@ -244,7 +244,8 @@
 
   function msToTime(ms) { const s = Math.floor(ms / 1000); return `${Math.floor(s / 60)}:${(s % 60).toString().padStart(2,'0')}`; }
 
-  let canvasCtx = null, artAmbienceCtx = null, particles = [], artAmbienceParticles = [], colorPalette = [], canvasAnimFrame = null, artAmbienceAnimFrame = null;
+  let canvasCtx = null, artAmbienceCtx = null, particles = [], artAmbienceParticles = [], canvasAnimFrame = null, artAmbienceAnimFrame = null;
+  let currentPalette = null, currentPollInterval = 5000;
 
   function setupCanvas() {
     const w = window.innerWidth, h = window.innerHeight, d = window.devicePixelRatio || 1;
@@ -267,14 +268,38 @@
         const c = document.createElement('canvas'), ctx = c.getContext('2d');
         c.width = 100; c.height = 100; ctx.drawImage(img, 0, 0, 100, 100);
         const data = ctx.getImageData(0, 0, 100, 100).data, colors = [];
+        let tB = 0, tS = 0, vP = 0;
+        
         for (let i = 0; i < data.length; i += 100) {
-          const b = (data[i] + data[i+1] + data[i+2]) / 3;
-          if (b > 30 && b < 225) colors.push({ r: data[i], g: data[i+1], b: data[i+2] });
+          const r = data[i], g = data[i+1], b = data[i+2];
+          const max = Math.max(r,g,b), min = Math.min(r,g,b);
+          const l = (max + min) / 2;
+          const s = max === min ? 0 : (l > 127.5 ? (max - min) / (510 - max - min) : (max - min) / (max + min));
+          tB += l; tS += s; vP++;
+          if (l > 30 && l < 225) colors.push({ r, g, b });
         }
-        const p = colors.slice(0, 5).map(c => `rgba(${c.r}, ${c.g}, ${c.b}, 0.6)`);
-        res(p.length ? p : ['rgba(34, 197, 94, 0.6)']);
+        
+        const avgB = tB / vP, avgS = tS / vP;
+        let uiColor = '#22c55e'; 
+        
+        // Prioritize pure white if the album is exceedingly dark or mostly black and white (monochrome)
+        if (colors.length) {
+          if (avgB < 60 || avgS < 0.15) {
+            uiColor = '#ffffff';
+          } else {
+            const dom = colors[0];
+            const domL = (Math.max(dom.r, dom.g, dom.b) + Math.min(dom.r, dom.g, dom.b)) / 2;
+            const factor = Math.max(1, 150 / (domL || 1)); 
+            uiColor = `rgb(${Math.min(255, dom.r * factor)}, ${Math.min(255, dom.g * factor)}, ${Math.min(255, dom.b * factor)})`;
+          }
+        } else {
+          uiColor = '#ffffff';
+        }
+        
+        const p = colors.slice(0, 5).map(col => `rgba(${col.r}, ${col.g}, ${col.b}, 0.6)`);
+        res({ palette: p.length ? p : ['rgba(34, 197, 94, 0.6)'], uiColor });
       };
-      img.onerror = () => res(['rgba(34, 197, 94, 0.6)']); img.src = url;
+      img.onerror = () => res({ palette: ['rgba(34, 197, 94, 0.6)'], uiColor: '#22c55e' }); img.src = url;
     });
   }
 
@@ -284,25 +309,21 @@
     draw(ctx) { const g = ctx.createRadialGradient(this.x, this.y, 0, this.x, this.y, this.s); g.addColorStop(0, this.c.replace('0.6', this.o.toString())); g.addColorStop(1, this.c.replace('0.6', '0')); ctx.fillStyle = g; ctx.beginPath(); ctx.arc(this.x, this.y, this.s, 0, Math.PI*2); ctx.fill(); }
   }
 
-  function startLiveBackground(url) {
+  function startLiveBackground(p) {
     if (!canvasCtx) setupCanvas();
-    extractColors(url).then(p => { 
-      colorPalette = p; 
-      
-      // Dynamic Card Gradient injection based on extracted dominant color
-      const rgb = p[0].match(/rgba\((\d+),\s*(\d+),\s*(\d+)/);
-      if(rgb) els.card.style.background = `linear-gradient(to right, rgba(${rgb[1]}, ${rgb[2]}, ${rgb[3]}, 0.2) 0%, rgba(23, 23, 23, 0.9) 60%, rgba(23, 23, 23, 0.9) 100%)`;
-      
-      particles = Array.from({length: Math.min(16, Math.floor((window.innerWidth*window.innerHeight)/70000))}, (_,i) => new Particle(window.innerWidth, window.innerHeight, p[i%p.length])); 
-      if (canvasAnimFrame) cancelAnimationFrame(canvasAnimFrame); 
-      const anim = () => { canvasCtx.clearRect(0,0,window.innerWidth,window.innerHeight); particles.forEach(pt => { pt.update(window.innerWidth,window.innerHeight); pt.draw(canvasCtx); }); canvasAnimFrame = requestAnimationFrame(anim); }; 
-      anim(); els.liveCanvas.classList.add('active'); 
-    });
+    particles = Array.from({length: Math.min(16, Math.floor((window.innerWidth*window.innerHeight)/70000))}, (_,i) => new Particle(window.innerWidth, window.innerHeight, p[i%p.length])); 
+    if (canvasAnimFrame) cancelAnimationFrame(canvasAnimFrame); 
+    const anim = () => { canvasCtx.clearRect(0,0,window.innerWidth,window.innerHeight); particles.forEach(pt => { pt.update(window.innerWidth,window.innerHeight); pt.draw(canvasCtx); }); canvasAnimFrame = requestAnimationFrame(anim); }; 
+    anim(); els.liveCanvas.classList.add('active'); 
   }
 
-  function startArtAmbience(url) {
+  function startArtAmbience(p) {
     if (!artAmbienceCtx) setupArtAmbienceCanvas();
-    extractColors(url).then(p => { const s = window.innerWidth >= 768 ? 600 : 400; artAmbienceParticles = Array.from({length: 8}, (_,i) => new Particle(s, s, p[i%p.length])); if (artAmbienceAnimFrame) cancelAnimationFrame(artAmbienceAnimFrame); const anim = () => { artAmbienceCtx.clearRect(0,0,s,s); artAmbienceParticles.forEach(pt => { pt.update(s,s); pt.draw(artAmbienceCtx); }); artAmbienceAnimFrame = requestAnimationFrame(anim); }; anim(); });
+    const s = window.innerWidth >= 768 ? 600 : 400;
+    artAmbienceParticles = Array.from({length: 8}, (_,i) => new Particle(s, s, p[i%p.length])); 
+    if (artAmbienceAnimFrame) cancelAnimationFrame(artAmbienceAnimFrame); 
+    const anim = () => { artAmbienceCtx.clearRect(0,0,s,s); artAmbienceParticles.forEach(pt => { pt.update(s,s); pt.draw(artAmbienceCtx); }); artAmbienceAnimFrame = requestAnimationFrame(anim); }; 
+    anim(); 
   }
 
   function stopFx() { 
@@ -310,10 +331,13 @@
     if (artAmbienceAnimFrame) cancelAnimationFrame(artAmbienceAnimFrame); 
     els.liveCanvas.classList.remove('active'); 
     particles = []; artAmbienceParticles = []; 
-    els.card.style.background = ''; // Reset card gradient on stop
+    els.card.style.background = '';
   }
 
-  window.addEventListener('resize', () => { if (canvasCtx && particles.length) { setupCanvas(); startLiveBackground(els.art.src); } if (artAmbienceCtx && artAmbienceParticles.length) { setupArtAmbienceCanvas(); startArtAmbience(els.art.src); }});
+  window.addEventListener('resize', () => { 
+    if (canvasCtx && particles.length && currentPalette) { setupCanvas(); startLiveBackground(currentPalette); } 
+    if (artAmbienceCtx && artAmbienceParticles.length && currentPalette) { setupArtAmbienceCanvas(); startArtAmbience(currentPalette); }
+  });
 
   let lastBGUrl = null, bgSwapTimer = null;
   function setBG(url) {
@@ -388,6 +412,7 @@
     stopPolling(); stopFx(); els.title.textContent = 'Connect Spotify'; els.artists.textContent = '—';
     els.elapsed.textContent = '0:00'; els.duration.textContent = '0:00'; els.bar.style.width = '0%'; els.art.src = 'https://placehold.co/600x600/121212/222222?text=Spotify&font=inter';
     setBG(null); els.connect.style.display = ''; els.artWrap.dataset.playing = false; showLyricsError('Lyrics will appear here');
+    els.bar.style.backgroundColor = ''; els.volumeSlider.style.accentColor = ''; els.card.style.background = '';
   }
 
   async function api(ep, m='POST') {
@@ -400,6 +425,14 @@
   function onPlayback(d, lat) {
     lastData = d; lastUpdateAt = performance.now();
     const i = d.item, p = !!d.is_playing, img = i?.album?.images?.[0]?.url || '';
+    
+    // Dynamic Premium Polling Rate
+    const expectedInterval = p ? 1000 : 5000;
+    if (currentPollInterval !== expectedInterval) {
+      clearInterval(pollTimer);
+      currentPollInterval = expectedInterval;
+      pollTimer = setInterval(poll, currentPollInterval);
+    }
     
     if (lastTrackId && i?.id && lastTrackId !== i.id) { 
       els.bar.classList.add('reset-animation'); els.bar.style.width = '0%'; setTimeout(() => els.bar.classList.remove('reset-animation'), 400); 
@@ -414,9 +447,26 @@
 
     els.title.textContent = i ? i.name : '—'; els.artists.textContent = i?.artists?.map(a=>a.name).join(', ') || '—';
     
-    if (img && els.art.src !== img) { els.art.src = img; setBG(img); if (p) { startLiveBackground(img); startArtAmbience(img); } }
-    else if (!img) { els.art.src = 'https://placehold.co/600x600'; stopFx(); }
-    if (p && img && els.art.src === img && !particles.length) { startLiveBackground(img); startArtAmbience(img); } else if (!p) stopFx();
+    if (img && els.art.src !== img) { 
+      els.art.src = img; setBG(img); 
+      extractColors(img).then(res => {
+        currentPalette = res.palette;
+        els.bar.style.backgroundColor = res.uiColor;
+        els.volumeSlider.style.accentColor = res.uiColor;
+        
+        const rgb = res.palette[0].match(/rgba\((\d+),\s*(\d+),\s*(\d+)/);
+        if(rgb) els.card.style.background = `linear-gradient(to right, rgba(${rgb[1]}, ${rgb[2]}, ${rgb[3]}, 0.2) 0%, rgba(23, 23, 23, 0.9) 60%, rgba(23, 23, 23, 0.9) 100%)`;
+        
+        if (p) { startLiveBackground(res.palette); startArtAmbience(res.palette); }
+      });
+    } else if (!img) { 
+      els.art.src = 'https://placehold.co/600x600'; stopFx(); 
+      els.bar.style.backgroundColor = ''; els.volumeSlider.style.accentColor = ''; els.card.style.background = '';
+    }
+    
+    if (p && img && els.art.src === img && !particles.length && currentPalette) { 
+      startLiveBackground(currentPalette); startArtAmbience(currentPalette); 
+    } else if (!p) stopFx();
 
     if (d.device?.volume_percent !== null) els.volumeSlider.value = d.device.volume_percent;
 
@@ -426,9 +476,18 @@
     els.artWrap.dataset.playing = p; els.playIcon.style.display = p ? 'none' : 'block'; els.pauseIcon.style.display = p ? 'block' : 'none';
 
     cancelAnimationFrame(animFrame);
+    let trackEndTriggered = false;
+    
     const tick = () => {
       if (!lastData) return;
       let cur = lastData.is_playing ? (lastData.progress_ms||0) + (performance.now() - lastUpdateAt) + lat : lastData.progress_ms||0;
+      
+      // Predictive Trigger Fetch
+      if (lastData.is_playing && lastData.item?.duration_ms && cur >= lastData.item.duration_ms - 100 && !trackEndTriggered) {
+        trackEndTriggered = true;
+        setTimeout(poll, 150);
+      }
+      
       if (cur > (lastData.item?.duration_ms||0)) cur = lastData.item?.duration_ms||0;
       
       els.elapsed.textContent = msToTime(cur); 
@@ -471,7 +530,7 @@
     if (c) { try { await exchangeCodeForToken(c); } catch { clearSession(); return onDisconnected(); } }
     if (!loadSession()) return onDisconnected(); 
     els.connect.style.display = 'none';
-    poll(); pollTimer = setInterval(poll, lastData?.is_playing ? 2000 : 5000);
+    poll(); pollTimer = setInterval(poll, currentPollInterval);
   }
 
   let volTimer;
