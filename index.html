@@ -81,21 +81,21 @@
       cursor: pointer;
     }
 
-    #lyricsScroll {
-      transition: transform 400ms cubic-bezier(0.25, 1, 0.5, 1);
-    }
-    .lyric-line {
-      transition: all 300ms cubic-bezier(0.25, 1, 0.5, 1);
-    }
+    #lyricsScroll { transition: transform 400ms cubic-bezier(0.25, 1, 0.5, 1); }
+    .lyric-line { transition: all 300ms cubic-bezier(0.25, 1, 0.5, 1); }
+
+    /* Hide fullscreen button when in fullscreen mode */
+    :fullscreen #fs { display: none !important; }
+    :-webkit-full-screen #fs { display: none !important; }
 
     @media (max-width: 900px) and (orientation: landscape) {
-      #card { padding: 12px 20px !important; gap: 16px !important; flex-direction: row !important; }
+      #card { padding: 12px 20px !important; gap: 16px !important; flex-direction: row !important; height: 90vh !important; max-height: 400px; width: 95vw !important; max-width: none !important; }
       #artWrap { max-width: 140px !important; }
       .control-btn.primary { width: 44px; height: 44px; }
       .control-btn { width: 38px; height: 38px; padding: 8px; }
       #title { font-size: 1.1rem !important; line-height: 1.2 !important; }
       #artists { font-size: 0.85rem !important; }
-      #lyricsWrapper { height: 140px !important; border-top: none; border-left: 1px solid rgba(64,64,64,0.5); padding-left: 16px; margin-left: 16px; margin-top: 0 !important; }
+      #lyricsWrapper { height: 100% !important; flex: 1; border-top: none; border-left: 1px solid rgba(64,64,64,0.5); padding-left: 16px; margin-left: 16px; margin-top: 0 !important; }
       #lyricsScroll { text-align: left; }
     }
   </style>
@@ -121,17 +121,12 @@
           </svg>
         </button>
 
-        <!-- Player Half -->
         <div class="flex flex-col landscape:flex-row items-center w-full lg:w-1/2 gap-4 sm:gap-8">
           <div id="artWrap" class="w-full max-w-[200px] sm:max-w-[240px] landscape:w-1/3 flex-shrink-0" data-playing="false">
             <img id="art" alt="Album Art" class="aspect-square w-full rounded-xl shadow-xl object-cover" src="https://placehold.co/600x600/121212/222222?text=Spotify&font=inter" />
           </div>
 
           <div class="flex-1 flex flex-col w-full min-w-0 text-center landscape:text-left justify-center">
-            <div id="state" class="mb-2">
-              <span id="state-badge" class="inline-block bg-neutral-700 text-neutral-300 text-[10px] sm:text-xs font-bold px-2 py-1 rounded-full uppercase tracking-wider">Not Connected</span>
-            </div>
-
             <h1 id="title" class="text-lg sm:text-2xl lg:text-3xl font-extrabold tracking-tight text-white line-clamp-2">Connect Spotify to start</h1>
             <p id="artists" class="text-sm sm:text-base lg:text-lg text-neutral-400 mt-1 line-clamp-2">—</p>
 
@@ -146,10 +141,7 @@
             </div>
 
             <div class="mt-4 flex flex-col items-center landscape:items-start gap-3">
-              <div class="flex gap-3">
-                <button id="connect" class="bg-green-600 text-white px-4 py-2 rounded-full text-xs font-bold transition-all hover:bg-green-500">Connect Spotify</button>
-                <button id="logout" class="bg-neutral-800 text-neutral-300 px-4 py-2 rounded-full text-xs font-medium transition-all hover:bg-neutral-700" style="display:none;">Logout</button>
-              </div>
+              <button id="connect" class="bg-green-600 text-white px-4 py-2 rounded-full text-xs font-bold transition-all hover:bg-green-500">Connect Spotify</button>
               
               <div class="flex items-center gap-3">
                 <button id="prevBtn" class="control-btn bg-neutral-800 hover:bg-neutral-700 w-10 h-10 flex items-center justify-center rounded-full text-white">
@@ -166,7 +158,6 @@
             </div>
           </div>
 
-          <!-- Volume -->
           <div class="flex flex-col items-center justify-center border-t landscape:border-t-0 landscape:border-l border-neutral-700/50 pt-3 landscape:pt-0 landscape:pl-4 mt-2 landscape:mt-0 w-full landscape:w-auto">
             <svg class="text-neutral-500 mb-2 hidden landscape:block" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5"/><path d="M15.54 8.46a5 5 0 0 1 0 7.07"/></svg>
             <input id="volumeSlider" type="range" orient="vertical" min="0" max="100" class="h-20 landscape:h-28 accent-green-500 bg-neutral-800 rounded-lg">
@@ -174,10 +165,7 @@
           </div>
         </div>
 
-        <!-- Lyrics Half -->
-        <!-- Changed mask to only fade out at the bottom -->
         <div id="lyricsWrapper" class="w-full h-40 sm:h-52 lg:h-72 lg:w-1/2 lg:border-l lg:border-t-0 border-t border-neutral-700/50 mt-4 pt-4 lg:mt-0 lg:pt-0 lg:pl-8 relative overflow-hidden" style="-webkit-mask-image: linear-gradient(to bottom, black 0%, black 75%, transparent 100%);">
-          <!-- Changed starting position from center to top-0 and added padding-bottom to allow full scroll -->
           <div id="lyricsScroll" class="absolute top-0 left-0 w-full text-center lg:text-left px-2 sm:px-4 pt-2 pb-32 flex flex-col gap-3 sm:gap-4" style="transform: translateY(0px);">
             <p class="text-neutral-500 text-sm mt-4">Lyrics will appear here</p>
           </div>
@@ -248,9 +236,9 @@
   const els = {
     art: document.getElementById('art'), artWrap: document.getElementById('artWrap'), artAmbience: document.getElementById('artAmbience'),
     bgA: document.getElementById('bgA'), bgB: document.getElementById('bgB'), liveCanvas: document.getElementById('liveCanvas'),
-    title: document.getElementById('title'), artists: document.getElementById('artists'), state: document.getElementById('state-badge'),
+    title: document.getElementById('title'), artists: document.getElementById('artists'),
     elapsed: document.getElementById('elapsed'), duration: document.getElementById('duration'), bar: document.getElementById('barInner'),
-    connect: document.getElementById('connect'), logout: document.getElementById('logout'), progress: document.getElementById('progress'),
+    connect: document.getElementById('connect'), progress: document.getElementById('progress'),
     card: document.getElementById('card'), fs: document.getElementById('fs'), volumeSlider: document.getElementById('volumeSlider'),
     playPauseBtn: document.getElementById('playPauseBtn'), playIcon: document.getElementById('playIcon'), pauseIcon: document.getElementById('pauseIcon'),
     prevBtn: document.getElementById('prevBtn'), nextBtn: document.getElementById('nextBtn'),
@@ -319,11 +307,6 @@
     img.onload = () => { els.bgB.style.backgroundImage = `url('${url}')`; els.bgB.style.opacity = .35; clearTimeout(bgSwapTimer); bgSwapTimer = setTimeout(() => { els.bgA.style.backgroundImage = `url('${url}')`; els.bgB.style.opacity = 0; }, 550); }; img.src = url;
   }
 
-  function setBadge(txt, type) {
-    els.state.textContent = txt; els.state.className = 'inline-block text-[10px] sm:text-xs font-bold px-2 py-1 rounded-full uppercase tracking-wider ' + (type === 'playing' ? 'bg-green-500 text-black' : (type === 'paused' ? 'bg-yellow-500 text-black' : 'bg-neutral-700 text-neutral-300'));
-  }
-
-  // Lyrics Engine
   let lyricsData = [];
   let currentLyricIdx = -1;
 
@@ -382,15 +365,15 @@
       const t0 = performance.now();
       const res = await fetch("https://api.spotify.com/v1/me/player?additional_types=track", { headers: { Authorization: `Bearer ${loadSession().access_token}` }, signal: pollController.signal });
       const lat = (performance.now() - t0) / 2;
-      if (res.status === 204 || res.status === 401 || res.status === 403) return res.status === 204 ? onNoContent() : (res.status === 403 ? setBadge('Access Denied', 'neutral') : onDisconnected());
+      if (res.status === 204 || res.status === 401 || res.status === 403) return res.status === 204 ? onNoContent() : onDisconnected();
       if (res.ok) onPlayback(await res.json(), lat);
     } catch (e) {} finally { pollController = null; }
   }
 
   function onDisconnected() {
-    stopPolling(); stopFx(); setBadge('Not connected'); els.title.textContent = 'Connect Spotify'; els.artists.textContent = '—';
+    stopPolling(); stopFx(); els.title.textContent = 'Connect Spotify'; els.artists.textContent = '—';
     els.elapsed.textContent = '0:00'; els.duration.textContent = '0:00'; els.bar.style.width = '0%'; els.art.src = 'https://placehold.co/600x600/121212/222222?text=Spotify&font=inter';
-    setBG(null); els.connect.style.display = ''; els.logout.style.display = 'none'; els.artWrap.dataset.playing = false; showLyricsError('Lyrics will appear here');
+    setBG(null); els.connect.style.display = ''; els.artWrap.dataset.playing = false; showLyricsError('Lyrics will appear here');
   }
 
   async function api(ep, m='POST') {
@@ -398,7 +381,7 @@
     try { if ((await fetch(ep, { method: m, headers: { 'Authorization': `Bearer ${s.access_token}` }})).ok) setTimeout(poll, 300); } catch (e) {}
   }
 
-  function onNoContent() { setBadge('Paused', 'paused'); els.title.textContent = lastData?.item?.name || 'Nothing playing'; els.artWrap.dataset.playing = false; }
+  function onNoContent() { els.title.textContent = lastData?.item?.name || 'Nothing playing'; els.artWrap.dataset.playing = false; }
 
   function onPlayback(d, lat) {
     lastData = d; lastUpdateAt = performance.now();
@@ -415,7 +398,6 @@
     
     lastTrackId = i?.id;
 
-    setBadge(p ? 'Playing' : 'Paused', p ? 'playing' : 'paused');
     els.title.textContent = i ? i.name : '—'; els.artists.textContent = i?.artists?.map(a=>a.name).join(', ') || '—';
     
     if (img && els.art.src !== img) { els.art.src = img; setBG(img); if (p) { startLiveBackground(img); startArtAmbience(img); } }
@@ -438,7 +420,6 @@
       els.elapsed.textContent = msToTime(cur); 
       els.bar.style.width = `${lastData.item?.duration_ms ? (cur/lastData.item.duration_ms)*100 : 0}%`;
 
-      // Lyric Syncing offset math updated
       if (lyricsData.length > 0) {
         let newIdx = -1;
         for (let i = lyricsData.length - 1; i >= 0; i--) {
@@ -454,7 +435,6 @@
           const newEl = document.getElementById(`lyric-${currentLyricIdx}`);
           if (newEl) {
             newEl.classList.remove('text-neutral-400', 'opacity-40', 'blur-[1px]'); newEl.classList.add('text-white', 'opacity-100', 'blur-none', 'scale-105', 'font-bold');
-            // Offset math anchors top to top with minor padding buffer
             const offset = newEl.offsetTop - 8; 
             els.lyricsScroll.style.transform = `translateY(-${Math.max(0, offset)}px)`;
           }
@@ -470,7 +450,7 @@
     const c = new URLSearchParams(location.search).get('code');
     if (c) { try { await exchangeCodeForToken(c); } catch { clearSession(); return onDisconnected(); } }
     if (!loadSession()) return onDisconnected(); 
-    els.connect.style.display = 'none'; els.logout.style.display = ''; 
+    els.connect.style.display = 'none';
     poll(); pollTimer = setInterval(poll, lastData?.is_playing ? 2000 : 5000);
   }
 
@@ -481,7 +461,7 @@
   });
   
   els.fs.addEventListener('click', async () => { try { document.fullscreenElement ? await document.exitFullscreen() : await document.documentElement.requestFullscreen(); } catch (e) {} });
-  els.connect.addEventListener('click', beginAuth); els.logout.addEventListener('click', () => { clearSession(); onDisconnected(); });
+  els.connect.addEventListener('click', beginAuth);
   els.playPauseBtn.addEventListener('click', () => api(lastData?.is_playing ? 'https://api.spotify.com/v1/me/player/pause' : 'https://api.spotify.com/v1/me/player/play', 'PUT'));
   els.nextBtn.addEventListener('click', () => api('https://api.spotify.com/v1/me/player/next')); els.prevBtn.addEventListener('click', () => api('https://api.spotify.com/v1/me/player/previous'));
 
