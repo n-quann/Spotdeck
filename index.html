@@ -175,9 +175,11 @@
         </div>
 
         <!-- Lyrics Half -->
-        <div id="lyricsWrapper" class="w-full h-40 sm:h-52 lg:h-72 lg:w-1/2 lg:border-l lg:border-t-0 border-t border-neutral-700/50 mt-4 pt-4 lg:mt-0 lg:pt-0 lg:pl-8 relative overflow-hidden" style="-webkit-mask-image: linear-gradient(transparent, black 15%, black 85%, transparent);">
-          <div id="lyricsScroll" class="absolute top-1/2 left-0 w-full text-center lg:text-left px-2 sm:px-4 flex flex-col gap-3 sm:gap-4" style="transform: translateY(-50%);">
-            <p class="text-neutral-500 text-sm">Lyrics will appear here</p>
+        <!-- Changed mask to only fade out at the bottom -->
+        <div id="lyricsWrapper" class="w-full h-40 sm:h-52 lg:h-72 lg:w-1/2 lg:border-l lg:border-t-0 border-t border-neutral-700/50 mt-4 pt-4 lg:mt-0 lg:pt-0 lg:pl-8 relative overflow-hidden" style="-webkit-mask-image: linear-gradient(to bottom, black 0%, black 75%, transparent 100%);">
+          <!-- Changed starting position from center to top-0 and added padding-bottom to allow full scroll -->
+          <div id="lyricsScroll" class="absolute top-0 left-0 w-full text-center lg:text-left px-2 sm:px-4 pt-2 pb-32 flex flex-col gap-3 sm:gap-4" style="transform: translateY(0px);">
+            <p class="text-neutral-500 text-sm mt-4">Lyrics will appear here</p>
           </div>
         </div>
 
@@ -364,8 +366,8 @@
 
   function showLyricsError(msg) {
     lyricsData = [];
-    els.lyricsScroll.innerHTML = `<p class="text-neutral-500 text-sm font-medium">${msg}</p>`;
-    els.lyricsScroll.style.transform = `translateY(-50%)`;
+    els.lyricsScroll.innerHTML = `<p class="text-neutral-500 text-sm font-medium mt-4">${msg}</p>`;
+    els.lyricsScroll.style.transform = `translateY(0px)`;
   }
 
   let pollTimer = null, animFrame = null, lastData = null, lastUpdateAt = 0, pollController = null, lastTrackId = null;
@@ -436,11 +438,11 @@
       els.elapsed.textContent = msToTime(cur); 
       els.bar.style.width = `${lastData.item?.duration_ms ? (cur/lastData.item.duration_ms)*100 : 0}%`;
 
-      // Lyric Syncing
+      // Lyric Syncing offset math updated
       if (lyricsData.length > 0) {
         let newIdx = -1;
         for (let i = lyricsData.length - 1; i >= 0; i--) {
-          if (cur >= lyricsData[i].time - 200) { newIdx = i; break; } // 200ms offset for smoother visual lead
+          if (cur >= lyricsData[i].time - 200) { newIdx = i; break; }
         }
         
         if (newIdx !== currentLyricIdx && newIdx !== -1) {
@@ -452,7 +454,8 @@
           const newEl = document.getElementById(`lyric-${currentLyricIdx}`);
           if (newEl) {
             newEl.classList.remove('text-neutral-400', 'opacity-40', 'blur-[1px]'); newEl.classList.add('text-white', 'opacity-100', 'blur-none', 'scale-105', 'font-bold');
-            const offset = newEl.offsetTop - (els.lyricsScroll.parentElement.clientHeight / 2) + (newEl.clientHeight / 2);
+            // Offset math anchors top to top with minor padding buffer
+            const offset = newEl.offsetTop - 8; 
             els.lyricsScroll.style.transform = `translateY(-${Math.max(0, offset)}px)`;
           }
         }
