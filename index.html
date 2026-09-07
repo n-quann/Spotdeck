@@ -263,6 +263,7 @@
 
   let canvasCtx = null, artAmbienceCtx = null, particles = [], artAmbienceParticles = [], canvasAnimFrame = null, artAmbienceAnimFrame = null;
   let currentUiColor = '#22c55e', currentPalette = null, currentPollInterval = 5000, localProgressMs = 0;
+  let activeScrollAnim = null;
 
   function setupCanvas() {
     const w = window.innerWidth, h = window.innerHeight, d = window.devicePixelRatio || 1;
@@ -559,6 +560,8 @@
             let scrollStartTime = null;
             const scrollDuration = 350;
 
+            if (activeScrollAnim) cancelAnimationFrame(activeScrollAnim);
+
             function animateScroll(timestamp) {
               if (!scrollStartTime) scrollStartTime = timestamp;
               const progress = Math.min((timestamp - scrollStartTime) / scrollDuration, 1);
@@ -567,10 +570,12 @@
               els.lyricsScroll.style.transform = `translateY(-${interpolatedY}px)`;
 
               if (progress < 1) {
-                requestAnimationFrame(animateScroll);
+                activeScrollAnim = requestAnimationFrame(animateScroll);
+              } else {
+                activeScrollAnim = null;
               }
             }
-            requestAnimationFrame(animateScroll);
+            activeScrollAnim = requestAnimationFrame(animateScroll);
           }
         }
       }
