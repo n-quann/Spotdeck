@@ -556,7 +556,13 @@
               targetOffset = prevEl ? prevEl.offsetTop - 8 : newEl.offsetTop - 40;
             }
             
-            let currentTransformY = parseFloat(els.lyricsScroll.style.transform.replace(/[^0-9.-]/g, '') || 0);
+            const matrix = window.getComputedStyle(els.lyricsScroll).transform;
+            let currentTransformY = 0;
+            if (matrix && matrix !== 'none') {
+              const values = matrix.split(', ');
+              currentTransformY = Math.abs(parseFloat(values[5]));
+            }
+
             let scrollStartTime = null;
             const scrollDuration = 350;
 
