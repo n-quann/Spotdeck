@@ -76,6 +76,9 @@
 
     #lyricsScroll { transition: transform 400ms cubic-bezier(0.25, 1, 0.5, 1); }
     .lyric-line { transition: all 300ms cubic-bezier(0.25, 1, 0.5, 1); }
+    
+    /* Smooth transition for dynamic background gradient */
+    #card { transition: background 800ms ease-in-out; }
 
     :fullscreen #fs { display: none !important; }
     :-webkit-full-screen #fs { display: none !important; }
@@ -150,7 +153,6 @@
                   </button>
                 </div>
                 
-                <!-- Max width reduced to 150px here -->
                 <div class="flex items-center justify-center landscape:justify-start gap-2 w-full max-w-[150px] mt-1">
                   <svg class="text-neutral-500 flex-shrink-0" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5"/><path d="M15.54 8.46a5 5 0 0 1 0 7.07"/></svg>
                   <input id="volumeSlider" type="range" min="0" max="100" class="w-full h-1.5 accent-green-500 bg-neutral-700 rounded-lg cursor-pointer">
@@ -284,7 +286,18 @@
 
   function startLiveBackground(url) {
     if (!canvasCtx) setupCanvas();
-    extractColors(url).then(p => { colorPalette = p; particles = Array.from({length: Math.min(16, Math.floor((window.innerWidth*window.innerHeight)/70000))}, (_,i) => new Particle(window.innerWidth, window.innerHeight, p[i%p.length])); if (canvasAnimFrame) cancelAnimationFrame(canvasAnimFrame); const anim = () => { canvasCtx.clearRect(0,0,window.innerWidth,window.innerHeight); particles.forEach(pt => { pt.update(window.innerWidth,window.innerHeight); pt.draw(canvasCtx); }); canvasAnimFrame = requestAnimationFrame(anim); }; anim(); els.liveCanvas.classList.add('active'); });
+    extractColors(url).then(p => { 
+      colorPalette = p; 
+      
+      // Dynamic Card Gradient injection based on extracted dominant color
+      const rgb = p[0].match(/rgba\((\d+),\s*(\d+),\s*(\d+)/);
+      if(rgb) els.card.style.background = `linear-gradient(to right, rgba(${rgb[1]}, ${rgb[2]}, ${rgb[3]}, 0.2) 0%, rgba(23, 23, 23, 0.9) 60%, rgba(23, 23, 23, 0.9) 100%)`;
+      
+      particles = Array.from({length: Math.min(16, Math.floor((window.innerWidth*window.innerHeight)/70000))}, (_,i) => new Particle(window.innerWidth, window.innerHeight, p[i%p.length])); 
+      if (canvasAnimFrame) cancelAnimationFrame(canvasAnimFrame); 
+      const anim = () => { canvasCtx.clearRect(0,0,window.innerWidth,window.innerHeight); particles.forEach(pt => { pt.update(window.innerWidth,window.innerHeight); pt.draw(canvasCtx); }); canvasAnimFrame = requestAnimationFrame(anim); }; 
+      anim(); els.liveCanvas.classList.add('active'); 
+    });
   }
 
   function startArtAmbience(url) {
@@ -292,7 +305,13 @@
     extractColors(url).then(p => { const s = window.innerWidth >= 768 ? 600 : 400; artAmbienceParticles = Array.from({length: 8}, (_,i) => new Particle(s, s, p[i%p.length])); if (artAmbienceAnimFrame) cancelAnimationFrame(artAmbienceAnimFrame); const anim = () => { artAmbienceCtx.clearRect(0,0,s,s); artAmbienceParticles.forEach(pt => { pt.update(s,s); pt.draw(artAmbienceCtx); }); artAmbienceAnimFrame = requestAnimationFrame(anim); }; anim(); });
   }
 
-  function stopFx() { if (canvasAnimFrame) cancelAnimationFrame(canvasAnimFrame); if (artAmbienceAnimFrame) cancelAnimationFrame(artAmbienceAnimFrame); els.liveCanvas.classList.remove('active'); particles = []; artAmbienceParticles = []; }
+  function stopFx() { 
+    if (canvasAnimFrame) cancelAnimationFrame(canvasAnimFrame); 
+    if (artAmbienceAnimFrame) cancelAnimationFrame(artAmbienceAnimFrame); 
+    els.liveCanvas.classList.remove('active'); 
+    particles = []; artAmbienceParticles = []; 
+    els.card.style.background = ''; // Reset card gradient on stop
+  }
 
   window.addEventListener('resize', () => { if (canvasCtx && particles.length) { setupCanvas(); startLiveBackground(els.art.src); } if (artAmbienceCtx && artAmbienceParticles.length) { setupArtAmbienceCanvas(); startArtAmbience(els.art.src); }});
 
