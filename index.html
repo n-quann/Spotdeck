@@ -153,10 +153,10 @@
               </div>
             </div>
 
-            <div class="mt-4 flex flex-col items-center landscape:items-start gap-3 w-full">
-              <button id="connect" class="bg-green-600 text-white px-4 py-2 rounded-full text-xs font-bold transition-all hover:bg-green-500">Connect Spotify</button>
+            <div class="mt-4 flex flex-col items-center landscape:items-start gap-3 w-full min-h-[64px] justify-center">
+              <button id="connect" class="bg-green-600 text-white px-6 py-2.5 rounded-full text-sm font-bold transition-all hover:bg-green-500 shadow-lg" style="display: none;">Connect Spotify</button>
               
-              <div class="flex flex-col items-center landscape:items-start gap-3 w-full">
+              <div id="controls" class="flex flex-col items-center landscape:items-start gap-3 w-full" style="display: none;">
                 <div class="flex items-center gap-3">
                   <button id="prevBtn" class="control-btn bg-neutral-800 hover:bg-neutral-700 w-10 h-10 flex items-center justify-center rounded-full text-white">
                     <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polygon points="19 20 9 12 19 4 19 20"/><line x1="5" y1="19" x2="5" y2="5"/></svg>
@@ -234,17 +234,21 @@
     const s = loadSession();
     if (!s) return false;
     if (Date.now() < s.expires_at) return true;
-    const res = await fetch("https://accounts.spotify.com/api/token", {
-      method: "POST", headers: { "Content-Type": "application/x-www-form-urlencoded" },
-      body: new URLSearchParams({ client_id: SPOTIFY_CLIENT_ID, grant_type: "refresh_token", refresh_token: s.refresh_token })
-    });
-    if (!res.ok) { clearSession(); return false; }
-    const d = await res.json();
-    s.access_token = d.access_token;
-    s.expires_at = Date.now() + (d.expires_in - 60) * 1000;
-    if (d.refresh_token) s.refresh_token = d.refresh_token;
-    saveSession(s);
-    return true;
+    try {
+      const res = await fetch("https://accounts.spotify.com/api/token", {
+        method: "POST", headers: { "Content-Type": "application/x-www-form-urlencoded" },
+        body: new URLSearchParams({ client_id: SPOTIFY_CLIENT_ID, grant_type: "refresh_token", refresh_token: s.refresh_token })
+      });
+      if (!res.ok) { clearSession(); return false; }
+      const d = await res.json();
+      s.access_token = d.access_token;
+      s.expires_at = Date.now() + (d.expires_in - 60) * 1000;
+      if (d.refresh_token) s.refresh_token = d.refresh_token;
+      saveSession(s);
+      return true;
+    } catch(e) {
+      return true; // Keep trying on generic network errors instead of forcing a logout
+    }
   }
 
   const els = {
@@ -252,7 +256,7 @@
     bgA: document.getElementById('bgA'), bgB: document.getElementById('bgB'), liveCanvas: document.getElementById('liveCanvas'),
     title: document.getElementById('title'), artists: document.getElementById('artists'),
     elapsed: document.getElementById('elapsed'), duration: document.getElementById('duration'), bar: document.getElementById('barInner'),
-    connect: document.getElementById('connect'), progress: document.getElementById('progress'),
+    connect: document.getElementById('connect'), controls: document.getElementById('controls'), progress: document.getElementById('progress'),
     card: document.getElementById('card'), fs: document.getElementById('fs'), volumeSlider: document.getElementById('volumeSlider'),
     playPauseBtn: document.getElementById('playPauseBtn'), playIcon: document.getElementById('playIcon'), pauseIcon: document.getElementById('pauseIcon'),
     prevBtn: document.getElementById('prevBtn'), nextBtn: document.getElementById('nextBtn'),
@@ -437,34 +441,61 @@
   function stopPolling() { clearInterval(pollTimer); cancelAnimationFrame(animFrame); if (pollController) pollController.abort(); }
 
   async function poll() {
-    if (!(await refreshIfNeeded())) return onDisconnected();
-    if (pollController) pollController.abort();
-    pollController = new AbortController();
     try {
+      if (!(await refreshIfNeeded())) return onDisconnected();
+      if (pollController) pollController.abort();
+      pollController = new AbortController();
       const t0 = performance.now();
       const res = await fetch("https://api.spotify.com/v1/me/player?additional_types=track", { headers: { Authorization: `Bearer ${loadSession().access_token}` }, signal: pollController.signal });
       const lat = (performance.now() - t0) / 2;
-      if (res.status === 204 || res.status === 401 || res.status === 403) return res.status === 204 ? onNoContent() : onDisconnected();
+      
+      if (res.status === 401 || res.status === 403) {
+        clearSession();
+        return onDisconnected();
+      }
+      if (res.status === 204) return onNoContent();
       if (res.ok) onPlayback(await res.json(), lat);
-    } catch (e) {} finally { pollController = null; }
+    } catch (e) {
+      // Catch network drops quietly so it doesn't break the loop
+    } finally { 
+      pollController = null; 
+    }
   }
 
   function onDisconnected() {
     stopPolling(); stopFx(); els.title.textContent = 'Connect Spotify'; els.artists.textContent = '—';
     els.elapsed.textContent = '0:00'; els.duration.textContent = '0:00'; els.bar.style.width = '0%'; els.art.src = 'https://placehold.co/600x600/121212/222222?text=Spotify&font=inter';
-    setBG(null); els.connect.style.display = 'block'; els.artWrap.dataset.playing = false; showLyricsError('Lyrics will appear here');
+    setBG(null); 
+    els.controls.style.display = 'none'; 
+    els.connect.style.display = 'block'; 
+    els.artWrap.dataset.playing = false; showLyricsError('Lyrics will appear here');
     els.bar.style.backgroundColor = ''; els.card.style.background = '';
     currentUiColor = '#22c55e'; updateVolStyles(0, currentUiColor);
   }
 
   async function api(ep, m='POST') {
-    const s = loadSession(); if (!s || !lastData?.device) return;
-    try { if ((await fetch(ep, { method: m, headers: { 'Authorization': `Bearer ${s.access_token}` }})).ok) setTimeout(poll, 300); } catch (e) {}
+    const s = loadSession(); if (!s) return onDisconnected();
+    try { 
+      const res = await fetch(ep, { method: m, headers: { 'Authorization': `Bearer ${s.access_token}` }});
+      if (res.status === 401) {
+        clearSession();
+        return onDisconnected();
+      }
+      if (res.ok) setTimeout(poll, 300); 
+    } catch (e) {}
   }
 
-  function onNoContent() { els.title.textContent = lastData?.item?.name || 'Nothing playing'; els.artWrap.dataset.playing = false; }
+  function onNoContent() { 
+    els.title.textContent = lastData?.item?.name || 'Nothing playing'; 
+    els.artWrap.dataset.playing = false; 
+    els.connect.style.display = 'none';
+    els.controls.style.display = 'flex';
+  }
 
   function onPlayback(d, lat) {
+    els.connect.style.display = 'none';
+    els.controls.style.display = 'flex';
+    
     lastData = d; lastUpdateAt = performance.now();
     const i = d.item, p = !!d.is_playing, img = i?.album?.images?.[0]?.url || '';
     
@@ -612,10 +643,21 @@
   async function boot() {
     setupCanvas(); els.card.classList.add('card-animate');
     const c = new URLSearchParams(location.search).get('code');
-    if (c) { try { await exchangeCodeForToken(c); } catch { clearSession(); return onDisconnected(); } }
+    if (c) { 
+      try { 
+        await exchangeCodeForToken(c); 
+      } catch { 
+        clearSession(); 
+        return onDisconnected(); 
+      } 
+    }
     if (!loadSession()) return onDisconnected(); 
+    
     els.connect.style.display = 'none';
-    poll(); pollTimer = setInterval(poll, currentPollInterval);
+    els.controls.style.display = 'flex';
+    
+    poll(); 
+    pollTimer = setInterval(poll, currentPollInterval);
   }
 
   let volTimer;
