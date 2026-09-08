@@ -135,8 +135,22 @@
         </button>
 
         <div id="playerHalf" class="flex flex-col landscape:flex-row items-center w-full lg:w-1/2 gap-4 sm:gap-8">
-          <div id="artWrap" class="w-full max-w-[200px] sm:max-w-[240px] landscape:w-1/3 flex-shrink-0" data-playing="false">
-            <img id="art" alt="Album Art" class="aspect-square w-full rounded-xl shadow-xl object-cover" src="https://placehold.co/600x600/121212/222222?text=Spotify&font=inter" />
+          
+          <!-- Album Art & Up Next Column -->
+          <div class="flex flex-col items-center w-full max-w-[200px] sm:max-w-[240px] landscape:w-1/3 flex-shrink-0 gap-3">
+            <div id="artWrap" class="w-full" data-playing="false">
+              <img id="art" alt="Album Art" class="aspect-square w-full rounded-xl shadow-xl object-cover" src="https://placehold.co/600x600/121212/222222?text=Spotify&font=inter" />
+            </div>
+
+            <!-- Up Next Component -->
+            <div id="upNextWrap" class="w-full flex items-center gap-2.5 px-3 py-1.5 bg-neutral-800/60 border border-neutral-700/40 rounded-xl backdrop-blur-md transition-opacity duration-300 opacity-0">
+              <img id="upNextArt" alt="Up Next Art" class="w-8 h-8 rounded-md object-cover flex-shrink-0 shadow-sm" src="https://placehold.co/64x64/121212/222222?text=Next" />
+              <div class="flex flex-col min-w-0 text-left">
+                <span class="text-[9px] uppercase tracking-wider font-bold text-neutral-400">Up Next</span>
+                <span id="upNextTitle" class="text-xs font-semibold text-white truncate">—</span>
+                <span id="upNextArtist" class="text-[10px] text-neutral-400 truncate leading-tight">—</span>
+              </div>
+            </div>
           </div>
 
           <div class="flex-1 flex flex-col w-full min-w-0 text-center landscape:text-left justify-center">
@@ -260,7 +274,9 @@
     card: document.getElementById('card'), fs: document.getElementById('fs'), volumeSlider: document.getElementById('volumeSlider'),
     playPauseBtn: document.getElementById('playPauseBtn'), playIcon: document.getElementById('playIcon'), pauseIcon: document.getElementById('pauseIcon'),
     prevBtn: document.getElementById('prevBtn'), nextBtn: document.getElementById('nextBtn'),
-    lyricsScroll: document.getElementById('lyricsScroll')
+    lyricsScroll: document.getElementById('lyricsScroll'),
+    upNextWrap: document.getElementById('upNextWrap'), upNextArt: document.getElementById('upNextArt'),
+    upNextTitle: document.getElementById('upNextTitle'), upNextArtist: document.getElementById('upNextArtist')
   };
 
   function msToTime(ms) { const s = Math.floor(ms / 1000); return `${Math.floor(s / 60)}:${(s % 60).toString().padStart(2,'0')}`; }
@@ -435,6 +451,33 @@
     els.lyricsScroll.style.transform = `translateY(0px)`;
   }
 
+  // Fetch next upcoming track in queue (only runs on song changes)
+  async function fetchUpNext() {
+    const s = loadSession();
+    if (!s) return;
+    try {
+      const res = await fetch("https://api.spotify.com/v1/me/player/queue", {
+        headers: { Authorization: `Bearer ${s.access_token}` }
+      });
+      if (res.ok) {
+        const d = await res.json();
+        const next = d.queue?.[0];
+        if (next) {
+          els.upNextTitle.textContent = next.name;
+          els.upNextArtist.textContent = next.artists?.map(a => a.name).join(', ') || '—';
+          els.upNextArt.src = next.album?.images?.[2]?.url || next.album?.images?.[0]?.url || 'https://placehold.co/64x64';
+          els.upNextWrap.classList.remove('opacity-0');
+          els.upNextWrap.classList.add('opacity-100');
+        } else {
+          els.upNextWrap.classList.remove('opacity-100');
+          els.upNextWrap.classList.add('opacity-0');
+        }
+      }
+    } catch (e) {
+      // Keep silent on error
+    }
+  }
+
   let pollTimer = null, animFrame = null, lastData = null, lastUpdateAt = 0, pollController = null, lastTrackId = null;
   let isRateLimited = false;
 
@@ -500,6 +543,8 @@
     els.controls.style.display = 'none'; 
     els.connect.style.display = 'block'; 
     els.artWrap.dataset.playing = false; showLyricsError('Lyrics will appear here');
+    els.upNextWrap.classList.remove('opacity-100');
+    els.upNextWrap.classList.add('opacity-0');
     els.bar.style.backgroundColor = ''; els.card.style.background = '';
     currentUiColor = '#22c55e'; updateVolStyles(0, currentUiColor);
   }
@@ -553,6 +598,7 @@
     if (i?.id && lastTrackId !== i.id) {
       showLyricsError('Loading lyrics...');
       fetchLyrics(i.name, i.artists[0].name);
+      fetchUpNext(); // Fetch upcoming song cleanly on change
     }
     
     lastTrackId = i?.id;
