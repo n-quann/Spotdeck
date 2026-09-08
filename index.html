@@ -75,7 +75,7 @@
     .control-btn:active { transform: scale(0.95); }
 
     #lyricsScroll { will-change: transform; }
-    .lyric-line { transition: color 300ms, opacity 300ms, filter 300ms, transform 300ms; }
+    .lyric-line { transition: color 250ms, opacity 250ms, filter 250ms, transform 250ms; }
     
     #card { transition: background 800ms ease-in-out; }
 
@@ -128,7 +128,6 @@
       
       <section id="card" class="relative flex flex-col lg:flex-row items-center gap-4 sm:gap-8 p-5 sm:p-8 w-full max-w-6xl bg-neutral-900/90 backdrop-blur-xl border border-neutral-700/80 rounded-2xl sm:rounded-3xl shadow-2xl opacity-0 z-30">
         
-        <!-- Fullscreen Button moved to bottom-right -->
         <button id="fs" aria-label="Fullscreen" class="absolute bottom-3 right-3 sm:bottom-5 sm:right-5 text-neutral-400 hover:text-white transition-colors p-2 z-40">
           <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
             <path d="M8 3H5a2 2 0 0 0-2 2v3m18 0V5a2 2 0 0 0-2-2h-3m0 18h3a2 2 0 0 0 2-2v-3M3 16v3a2 2 0 0 0 2 2h3"/>
@@ -438,6 +437,7 @@
     if (lyricsData.length) {
       els.lyricsScroll.innerHTML = lyricsData.map((l, i) => `<p id="lyric-${i}" class="lyric-line text-sm sm:text-base lg:text-lg text-neutral-400 opacity-40 blur-[1px] transform origin-center lg:origin-left cursor-default">${l.text}</p>`).join('');
       currentLyricIdx = -1;
+      if (activeScrollAnim) cancelAnimationFrame(activeScrollAnim);
       els.lyricsScroll.style.transform = `translateY(0px)`;
     } else {
       showLyricsError('Instrumental');
@@ -446,6 +446,7 @@
 
   function showLyricsError(msg) {
     lyricsData = [];
+    if (activeScrollAnim) cancelAnimationFrame(activeScrollAnim);
     els.lyricsScroll.innerHTML = `<p class="text-neutral-500 text-sm font-medium mt-4">${msg}</p>`;
     els.lyricsScroll.style.transform = `translateY(0px)`;
   }
@@ -630,7 +631,8 @@
     }
 
     let serverPos = (d.progress_ms || 0) + (p ? lat : 0);
-    if (trackChanged || !p || Math.abs(localProgressMs - serverPos) > 1500) {
+    // Smooth time alignment: only accept backwards drift if the user explicitly seeked (>2000ms jump)
+    if (trackChanged || !p || serverPos > localProgressMs || Math.abs(localProgressMs - serverPos) > 2000) {
       localProgressMs = serverPos;
     }
 
@@ -664,18 +666,30 @@
       if (lyricsData.length > 0) {
         let newIdx = -1;
         for (let j = lyricsData.length - 1; j >= 0; j--) {
-          if (cur >= lyricsData[j].time - 500) { newIdx = j; break; }
+          // Precise timing check (eliminates premature 500ms jitter)
+          if (cur >= lyricsData[j].time) { 
+            newIdx = j; 
+            break; 
+          }
         }
         
-        if (newIdx !== currentLyricIdx && newIdx !== -1) {
+        // Prevent backward bouncing: only step backwards if user actually seeked back (>2000ms)
+        const isBackwardsJump = newIdx < currentLyricIdx;
+        const allowScroll = !isBackwardsJump || (currentLyricIdx !== -1 && cur < lyricsData[currentLyricIdx].time - 2000);
+
+        if (newIdx !== currentLyricIdx && newIdx !== -1 && allowScroll) {
           if (currentLyricIdx !== -1) {
             const oldEl = document.getElementById(`lyric-${currentLyricIdx}`);
-            if (oldEl) { oldEl.classList.remove('text-white', 'opacity-100', 'blur-none', 'scale-105', 'font-bold'); oldEl.classList.add('text-neutral-400', 'opacity-40', 'blur-[1px]'); }
+            if (oldEl) { 
+              oldEl.classList.remove('text-white', 'opacity-100', 'blur-none', 'scale-105', 'font-bold'); 
+              oldEl.classList.add('text-neutral-400', 'opacity-40', 'blur-[1px]'); 
+            }
           }
           currentLyricIdx = newIdx;
           const newEl = document.getElementById(`lyric-${currentLyricIdx}`);
           if (newEl) {
-            newEl.classList.remove('text-neutral-400', 'opacity-40', 'blur-[1px]'); newEl.classList.add('text-white', 'opacity-100', 'blur-none', 'scale-105', 'font-bold');
+            newEl.classList.remove('text-neutral-400', 'opacity-40', 'blur-[1px]'); 
+            newEl.classList.add('text-white', 'opacity-100', 'blur-none', 'scale-105', 'font-bold');
             
             let targetOffset = 0;
             if (currentLyricIdx > 0) {
@@ -691,7 +705,7 @@
             }
 
             let scrollStartTime = null;
-            const scrollDuration = 350;
+            const scrollDuration = 280;
 
             if (activeScrollAnim) cancelAnimationFrame(activeScrollAnim);
 
