@@ -247,7 +247,7 @@
       saveSession(s);
       return true;
     } catch(e) {
-      return true; // Keep trying on generic network errors instead of forcing a logout
+      return true;
     }
   }
 
@@ -447,16 +447,31 @@
       pollController = new AbortController();
       const t0 = performance.now();
       const res = await fetch("https://api.spotify.com/v1/me/player?additional_types=track", { headers: { Authorization: `Bearer ${loadSession().access_token}` }, signal: pollController.signal });
-      const lat = (performance.now() - t0) / 2;
       
+      // Handle Rate Limiting (429) or Auth Drops (401/403) gracefully
+      if (res.status === 429) {
+        console.warn("Spotify Rate Limited (429). Backing off polling interval.");
+        clearInterval(pollTimer);
+        pollTimer = setInterval(poll, 15000); // Back off to 15 seconds on rate limit
+        return;
+      }
       if (res.status === 401 || res.status === 403) {
         clearSession();
         return onDisconnected();
       }
       if (res.status === 204) return onNoContent();
-      if (res.ok) onPlayback(await res.json(), lat);
+      
+      const lat = (performance.now() - t0) / 2;
+      if (res.ok) {
+        if (currentPollInterval !== 1000 && lastData?.is_playing) {
+          clearInterval(pollTimer);
+          currentPollInterval = 1000;
+          pollTimer = setInterval(poll, currentPollInterval);
+        }
+        onPlayback(await res.json(), lat);
+      }
     } catch (e) {
-      // Catch network drops quietly so it doesn't break the loop
+      // Ignore abort errors
     } finally { 
       pollController = null; 
     }
@@ -477,7 +492,7 @@
     const s = loadSession(); if (!s) return onDisconnected();
     try { 
       const res = await fetch(ep, { method: m, headers: { 'Authorization': `Bearer ${s.access_token}` }});
-      if (res.status === 401) {
+      if (res.status === 401 || res.status === 429) {
         clearSession();
         return onDisconnected();
       }
@@ -498,13 +513,6 @@
     
     lastData = d; lastUpdateAt = performance.now();
     const i = d.item, p = !!d.is_playing, img = i?.album?.images?.[0]?.url || '';
-    
-    const expectedInterval = p ? 1000 : 5000;
-    if (currentPollInterval !== expectedInterval) {
-      clearInterval(pollTimer);
-      currentPollInterval = expectedInterval;
-      pollTimer = setInterval(poll, currentPollInterval);
-    }
     
     const trackChanged = lastTrackId && i?.id && lastTrackId !== i.id;
     
