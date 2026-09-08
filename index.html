@@ -311,53 +311,62 @@
           ctx.drawImage(img, 0, 0, 64, 64);
           const data = ctx.getImageData(0, 0, 64, 64).data;
           
-          let colorBuckets = {};
+          let buckets = {};
 
           for (let i = 0; i < data.length; i += 4) {
             const r = data[i], g = data[i + 1], b = data[i + 2], a = data[i + 3];
             if (a < 128) continue;
 
-            // Convert to HSL for perceptually accurate filtering
+            const max = Math.max(r, g, b), min = Math.min(r, g, b);
+            const l = (max + min) / 510;
+            if (l < 0.1 || l > 0.9) continue; // Ignore pure black and pure white
+
+            // Group similar colors together
+            const qr = Math.round(r / 24) * 24;
+            const qg = Math.round(g / 24) * 24;
+            const qb = Math.round(b / 24) * 24;
+            const key = `${qr},${qg},${qb}`;
+
+            if (!buckets[key]) buckets[key] = { r: 0, g: 0, b: 0, count: 0 };
+            buckets[key].r += r; 
+            buckets[key].g += g; 
+            buckets[key].b += b;
+            buckets[key].count++;
+          }
+
+          const sorted = Object.values(buckets).map(bucket => {
+            const r = bucket.r / bucket.count;
+            const g = bucket.g / bucket.count;
+            const b = bucket.b / bucket.count;
+            
             const max = Math.max(r, g, b), min = Math.min(r, g, b);
             const l = (max + min) / 510;
             const d = max - min;
             const s = max === min ? 0 : (l > 0.5 ? d / (510 - max - min) : d / (max + min));
-
-            // Ignore pure black, near-black, and blown-out whites
-            if (l < 0.08 || l > 0.94) continue;
-
-            // Quantize down to groups of 16
-            const qr = Math.round(r / 16) * 16;
-            const qg = Math.round(g / 16) * 16;
-            const qb = Math.round(b / 16) * 16;
-            const key = `${qr},${qg},${qb}`;
-
-            // Weight colors with higher saturation so pastels & accents win over plain beige
-            const weight = 1 + (s * 3.5);
-            colorBuckets[key] = (colorBuckets[key] || 0) + weight;
-          }
-
-          const sorted = Object.entries(colorBuckets).sort((a, b) => b[1] - a[1]);
+            
+            // Exponentially boost vibrant colors so small accents crush dull backgrounds
+            const score = bucket.count * Math.pow(s + 0.1, 3);
+            return { r, g, b, score };
+          }).sort((a, b) => b.score - a.score);
 
           if (sorted.length > 0) {
-            const [r, g, b] = sorted[0][0].split(',').map(Number);
+            const best = sorted[0];
             
-            // Boost brightness slightly if too dim for UI text/bars
-            const lum = 0.299 * r + 0.587 * g + 0.114 * b;
-            const factor = lum < 90 ? 90 / (lum || 1) : 1;
-            const uiR = Math.min(255, Math.round(r * factor));
-            const uiG = Math.min(255, Math.round(g * factor));
-            const uiB = Math.min(255, Math.round(b * factor));
+            // Boost brightness slightly if the most vibrant color is too dark for UI elements
+            const lum = 0.299 * best.r + 0.587 * best.g + 0.114 * best.b;
+            const factor = lum < 100 ? 100 / (lum || 1) : 1;
+            const uiR = Math.min(255, Math.round(best.r * factor));
+            const uiG = Math.min(255, Math.round(best.g * factor));
+            const uiB = Math.min(255, Math.round(best.b * factor));
 
             const uiColor = `rgb(${uiR}, ${uiG}, ${uiB})`;
-            const palette = sorted.slice(0, 5).map(([rgb]) => `rgba(${rgb}, 0.6)`);
+            const palette = sorted.slice(0, 5).map(c => `rgba(${Math.round(c.r)}, ${Math.round(c.g)}, ${Math.round(c.b)}, 0.6)`);
 
             res({ palette, uiColor });
           } else {
-            res({ palette: ['rgba(236, 72, 153, 0.6)'], uiColor: '#ec4899' });
+            res({ palette: ['rgba(255, 255, 255, 0.4)'], uiColor: '#ffffff' });
           }
         } catch (err) {
-          // Fallback without resetting to green
           res({ palette: ['rgba(255, 255, 255, 0.4)'], uiColor: '#ffffff' });
         }
       };
@@ -366,7 +375,6 @@
         res({ palette: ['rgba(255, 255, 255, 0.4)'], uiColor: '#ffffff' });
       };
 
-      // Cache-buster query param prevents stale non-CORS browser cache hits
       img.src = url.includes('?') ? `${url}&cors=1` : `${url}?cors=1`;
     });
   }
