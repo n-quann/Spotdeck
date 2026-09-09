@@ -319,9 +319,8 @@
 
             const max = Math.max(r, g, b), min = Math.min(r, g, b);
             const l = (max + min) / 510;
-            if (l < 0.1 || l > 0.9) continue; // Ignore pure black and pure white
+            if (l < 0.1 || l > 0.9) continue; 
 
-            // Group similar colors together
             const qr = Math.round(r / 24) * 24;
             const qg = Math.round(g / 24) * 24;
             const qb = Math.round(b / 24) * 24;
@@ -344,15 +343,12 @@
             const d = max - min;
             const s = max === min ? 0 : (l > 0.5 ? d / (510 - max - min) : d / (max + min));
             
-            // Exponentially boost vibrant colors so small accents crush dull backgrounds
             const score = bucket.count * Math.pow(s + 0.1, 3);
             return { r, g, b, score };
           }).sort((a, b) => b.score - a.score);
 
           if (sorted.length > 0) {
             const best = sorted[0];
-            
-            // Boost brightness slightly if the most vibrant color is too dark for UI elements
             const lum = 0.299 * best.r + 0.587 * best.g + 0.114 * best.b;
             const factor = lum < 100 ? 100 / (lum || 1) : 1;
             const uiR = Math.min(255, Math.round(best.r * factor));
@@ -483,7 +479,9 @@
       });
       if (res.ok) {
         const d = await res.json();
-        const next = d.queue?.[0];
+        // Skip nulls or local files that can offset the queue
+        const next = d.queue?.find(t => t && t.type === 'track');
+        
         if (next) {
           els.upNextTitle.textContent = next.name;
           els.upNextArtist.textContent = next.artists?.map(a => a.name).join(', ') || '—';
@@ -500,6 +498,7 @@
 
   let pollTimer = null, animFrame = null, lastData = null, lastUpdateAt = 0, pollController = null, lastTrackId = null;
   let isRateLimited = false;
+  let queuePollCounter = 0; // Added counter for background queue syncing
 
   function stopPolling() { clearInterval(pollTimer); cancelAnimationFrame(animFrame); if (pollController) pollController.abort(); }
 
@@ -615,7 +614,17 @@
     if (i?.id && lastTrackId !== i.id) {
       showLyricsError('Loading lyrics...');
       fetchLyrics(i.name, i.artists[0].name);
-      fetchUpNext();
+      
+      // Delay to let Spotify backend sync after skip
+      setTimeout(fetchUpNext, 1500);
+      queuePollCounter = 0;
+    } else if (p) {
+      // Sync queue every ~15 seconds to catch manual additions
+      queuePollCounter++;
+      if (queuePollCounter >= 5) {
+        fetchUpNext();
+        queuePollCounter = 0;
+      }
     }
     
     lastTrackId = i?.id;
@@ -654,7 +663,6 @@
     }
 
     let serverPos = (d.progress_ms || 0) + (p ? lat : 0);
-    // Smooth time alignment: only accept backwards drift if the user explicitly seeked (>2000ms jump)
     if (trackChanged || !p || serverPos > localProgressMs || Math.abs(localProgressMs - serverPos) > 2000) {
       localProgressMs = serverPos;
     }
@@ -689,14 +697,12 @@
       if (lyricsData.length > 0) {
         let newIdx = -1;
         for (let j = lyricsData.length - 1; j >= 0; j--) {
-          // Precise timing check (eliminates premature 500ms jitter)
           if (cur >= lyricsData[j].time) { 
             newIdx = j; 
             break; 
           }
         }
         
-        // Prevent backward bouncing: only step backwards if user actually seeked back (>2000ms)
         const isBackwardsJump = newIdx < currentLyricIdx;
         const allowScroll = !isBackwardsJump || (currentLyricIdx !== -1 && cur < lyricsData[currentLyricIdx].time - 2000);
 
