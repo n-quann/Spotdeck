@@ -394,13 +394,38 @@
   let lyricsData = [], currentLyricIdx = -1;
 
   async function fetchLyrics(track, artist) {
-    const cleanTrack = track.replace(/\s*\(feat\..*?\)/i, '').replace(/\s*-.*?(Remaster|Mix|Edit)/i, '').trim();
+    // Strip all parentheses/brackets and isolate the primary artist
+    const cleanTrack = track.replace(/[\(\[].*?[\)\]]/g, '').trim();
+    const primaryArtist = artist.split(',')[0].trim();
+    
     try {
-      const res = await fetch(`https://lrclib.net/api/get?track_name=${encodeURIComponent(cleanTrack)}&artist_name=${encodeURIComponent(artist)}`);
-      if (!res.ok) throw new Error('No lyrics');
-      const data = await res.json();
-      if (data.syncedLyrics) parseLrc(data.syncedLyrics); else showLyricsError('No synced lyrics available');
-    } catch (e) { showLyricsError('Lyrics not found in public database'); }
+      // Attempt 1: Fast exact match lookup
+      let res = await fetch(`https://lrclib.net/api/get?track_name=${encodeURIComponent(cleanTrack)}&artist_name=${encodeURIComponent(primaryArtist)}`);
+      if (res.ok) {
+        const data = await res.json();
+        if (data.syncedLyrics) {
+          parseLrc(data.syncedLyrics);
+          return;
+        }
+      }
+
+      // Attempt 2: Fuzzy search fallback
+      const searchQ = encodeURIComponent(`${cleanTrack} ${primaryArtist}`);
+      res = await fetch(`https://lrclib.net/api/search?q=${searchQ}`);
+      if (res.ok) {
+        const data = await res.json();
+        // Extract the first search result that contains a synced timeline
+        const bestMatch = data.find(item => item.syncedLyrics);
+        if (bestMatch) {
+          parseLrc(bestMatch.syncedLyrics);
+          return;
+        }
+      }
+      
+      showLyricsError('No synced lyrics available');
+    } catch (e) { 
+      showLyricsError('Lyrics not found in public database'); 
+    }
   }
 
   function parseLrc(lrc) {
@@ -493,7 +518,6 @@
       releaseWakeLock(); 
     }
 
-    // Explicitly manage the loop based on visibility and playback state
     clearInterval(pollTimer);
     if (!document.hidden || p) {
       pollTimer = setInterval(poll, currentPollInterval);
