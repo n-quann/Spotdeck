@@ -208,6 +208,29 @@
   const REDIRECT_URI = here.origin + basePath;
   const SCOPES = ["user-read-currently-playing", "user-read-playback-state", "user-modify-playback-state", "streaming", "user-read-email", "user-read-private"];
 
+  // WAKE LOCK API
+  let wakeLock = null;
+
+  async function requestWakeLock() {
+    if ('wakeLock' in navigator) {
+      try {
+        wakeLock = await navigator.wakeLock.request('screen');
+        wakeLock.addEventListener('release', () => {
+          wakeLock = null;
+        });
+      } catch (err) {
+        console.warn('Wake Lock error:', err);
+      }
+    }
+  }
+
+  function releaseWakeLock() {
+    if (wakeLock !== null) {
+      wakeLock.release().catch(() => {});
+      wakeLock = null;
+    }
+  }
+
   async function sha256(p) { const e = new TextEncoder().encode(p); return await crypto.subtle.digest("SHA-256", e); }
   function base64url(b) { return btoa(String.fromCharCode(...new Uint8Array(b))).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, ""); }
   function randStr(l=64) { const a = new Uint8Array(l); crypto.getRandomValues(a); return Array.from(a).map(x => (x % 36).toString(36)).join(""); }
@@ -498,7 +521,7 @@
 
   let pollTimer = null, animFrame = null, lastData = null, lastUpdateAt = 0, pollController = null, lastTrackId = null;
   let isRateLimited = false;
-  let queuePollCounter = 0; // Added counter for background queue syncing
+  let queuePollCounter = 0;
 
   function stopPolling() { clearInterval(pollTimer); cancelAnimationFrame(animFrame); if (pollController) pollController.abort(); }
 
@@ -564,6 +587,7 @@
     els.upNextWrap.classList.add('opacity-0');
     els.bar.style.backgroundColor = ''; els.card.style.background = '';
     currentUiColor = '#22c55e'; updateVolStyles(0, currentUiColor);
+    releaseWakeLock(); // Release lock when disconnected
   }
 
   async function api(ep, m='POST') {
@@ -589,6 +613,7 @@
     els.artWrap.dataset.playing = false; 
     els.connect.style.display = 'none';
     els.controls.style.display = 'flex';
+    releaseWakeLock();
   }
 
   function onPlayback(d, lat) {
@@ -597,6 +622,13 @@
     
     lastData = d; lastUpdateAt = performance.now();
     const i = d.item, p = !!d.is_playing, img = i?.album?.images?.[0]?.url || '';
+    
+    // Manage Wake Lock based on playback state
+    if (p) {
+      requestWakeLock();
+    } else {
+      releaseWakeLock();
+    }
     
     const expectedInterval = p ? 3000 : 7000;
     if (currentPollInterval !== expectedInterval) {
@@ -614,12 +646,9 @@
     if (i?.id && lastTrackId !== i.id) {
       showLyricsError('Loading lyrics...');
       fetchLyrics(i.name, i.artists[0].name);
-      
-      // Delay to let Spotify backend sync after skip
       setTimeout(fetchUpNext, 1500);
       queuePollCounter = 0;
     } else if (p) {
-      // Sync queue every ~15 seconds to catch manual additions
       queuePollCounter++;
       if (queuePollCounter >= 5) {
         fetchUpNext();
@@ -760,11 +789,16 @@
     trackChanged ? setTimeout(tick, 400) : tick();
   }
 
-  document.addEventListener('visibilitychange', () => {
+  // Handle visibility changes to restore wake lock
+  document.addEventListener('visibilitychange', async () => {
     clearInterval(pollTimer);
     if (document.hidden) {
       pollTimer = setInterval(poll, 15000);
+      wakeLock = null; // Browser automatically releases lock on hidden
     } else {
+      if (lastData?.is_playing) {
+        await requestWakeLock();
+      }
       poll();
       pollTimer = setInterval(poll, currentPollInterval);
     }
