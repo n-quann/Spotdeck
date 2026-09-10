@@ -57,6 +57,7 @@
       position: fixed; top: 50%; left: 50%; transform: translate(-50%, -50%);
       width: 400px; height: 400px; z-index: 10; opacity: 0; transition: opacity 800ms;
       filter: blur(80px); pointer-events: none;
+      will-change: opacity; transform: translateZ(0);
     }
     [data-playing="true"] #artAmbience { opacity: 0.8; }
     @media (min-width: 640px) { #artAmbience { width: 500px; height: 500px; } }
@@ -67,6 +68,7 @@
     #liveCanvas {
       position: absolute; inset: 0; width: 100%; height: 100%;
       opacity: 0; transition: opacity 1s; filter: blur(80px); z-index: 15; pointer-events: none;
+      will-change: opacity; transform: translateZ(0);
     }
     #liveCanvas.active { opacity: 0.6; }
 
@@ -74,7 +76,10 @@
     .control-btn:hover { transform: scale(1.05); }
     .control-btn:active { transform: scale(0.95); }
 
-    #lyricsScroll { will-change: transform; }
+    #lyricsScroll { 
+      will-change: transform; 
+      transition: transform 350ms cubic-bezier(0.2, 0.8, 0.2, 1);
+    }
     .lyric-line { transition: color 250ms, opacity 250ms, filter 250ms, transform 250ms; }
     
     #card { transition: background 800ms ease-in-out; }
@@ -208,28 +213,13 @@
   const REDIRECT_URI = here.origin + basePath;
   const SCOPES = ["user-read-currently-playing", "user-read-playback-state", "user-modify-playback-state", "streaming", "user-read-email", "user-read-private"];
 
-  // WAKE LOCK API
   let wakeLock = null;
-
   async function requestWakeLock() {
     if ('wakeLock' in navigator) {
-      try {
-        wakeLock = await navigator.wakeLock.request('screen');
-        wakeLock.addEventListener('release', () => {
-          wakeLock = null;
-        });
-      } catch (err) {
-        console.warn('Wake Lock error:', err);
-      }
+      try { wakeLock = await navigator.wakeLock.request('screen'); wakeLock.addEventListener('release', () => wakeLock = null); } catch (e) {}
     }
   }
-
-  function releaseWakeLock() {
-    if (wakeLock !== null) {
-      wakeLock.release().catch(() => {});
-      wakeLock = null;
-    }
-  }
+  function releaseWakeLock() { if (wakeLock) { wakeLock.release().catch(()=>{}); wakeLock = null; } }
 
   async function sha256(p) { const e = new TextEncoder().encode(p); return await crypto.subtle.digest("SHA-256", e); }
   function base64url(b) { return btoa(String.fromCharCode(...new Uint8Array(b))).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, ""); }
@@ -240,21 +230,16 @@
   function clearSession() { localStorage.removeItem("spnp.session"); }
 
   async function beginAuth() {
-    const v = randStr(64);
-    sessionStorage.setItem("spnp.code_verifier", v);
+    const v = randStr(64); sessionStorage.setItem("spnp.code_verifier", v);
     const url = new URL("https://accounts.spotify.com/authorize");
-    url.searchParams.set("response_type", "code");
-    url.searchParams.set("client_id", SPOTIFY_CLIENT_ID);
-    url.searchParams.set("code_challenge_method", "S256");
-    url.searchParams.set("code_challenge", base64url(await sha256(v)));
-    url.searchParams.set("redirect_uri", REDIRECT_URI);
-    url.searchParams.set("scope", SCOPES.join(" "));
+    url.searchParams.set("response_type", "code"); url.searchParams.set("client_id", SPOTIFY_CLIENT_ID);
+    url.searchParams.set("code_challenge_method", "S256"); url.searchParams.set("code_challenge", base64url(await sha256(v)));
+    url.searchParams.set("redirect_uri", REDIRECT_URI); url.searchParams.set("scope", SCOPES.join(" "));
     window.location = url.toString();
   }
 
   async function exchangeCodeForToken(c) {
-    const v = sessionStorage.getItem("spnp.code_verifier");
-    if (!v) throw new Error("Missing PKCE");
+    const v = sessionStorage.getItem("spnp.code_verifier"); if (!v) throw new Error("Missing PKCE");
     const res = await fetch("https://accounts.spotify.com/api/token", {
       method: "POST", headers: { "Content-Type": "application/x-www-form-urlencoded" },
       body: new URLSearchParams({ client_id: SPOTIFY_CLIENT_ID, grant_type: "authorization_code", code: c, redirect_uri: REDIRECT_URI, code_verifier: v })
@@ -266,8 +251,7 @@
   }
 
   async function refreshIfNeeded() {
-    const s = loadSession();
-    if (!s) return false;
+    const s = loadSession(); if (!s) return false;
     if (Date.now() < s.expires_at) return true;
     try {
       const res = await fetch("https://accounts.spotify.com/api/token", {
@@ -276,14 +260,10 @@
       });
       if (!res.ok) { clearSession(); return false; }
       const d = await res.json();
-      s.access_token = d.access_token;
-      s.expires_at = Date.now() + (d.expires_in - 60) * 1000;
+      s.access_token = d.access_token; s.expires_at = Date.now() + (d.expires_in - 60) * 1000;
       if (d.refresh_token) s.refresh_token = d.refresh_token;
-      saveSession(s);
-      return true;
-    } catch(e) {
-      return true;
-    }
+      saveSession(s); return true;
+    } catch(e) { return true; }
   }
 
   const els = {
@@ -303,8 +283,9 @@
   function msToTime(ms) { const s = Math.floor(ms / 1000); return `${Math.floor(s / 60)}:${(s % 60).toString().padStart(2,'0')}`; }
 
   let canvasCtx = null, artAmbienceCtx = null, particles = [], artAmbienceParticles = [], canvasAnimFrame = null, artAmbienceAnimFrame = null;
-  let currentUiColor = '#22c55e', currentPalette = null, currentPollInterval = 3000, localProgressMs = 0;
-  let activeScrollAnim = null;
+  let currentUiColor = '#22c55e', currentPalette = null, currentPollInterval = 12000;
+  let idlePollCount = 0;
+  let syncProgressMs = 0, syncTimestamp = performance.now(); // Absolute sync vars
 
   function setupCanvas() {
     const w = window.innerWidth, h = window.innerHeight, d = window.devicePixelRatio || 1;
@@ -322,78 +303,35 @@
 
   function extractColors(url) {
     return new Promise((res) => {
-      const img = new Image();
-      img.crossOrigin = 'Anonymous';
-      
+      const img = new Image(); img.crossOrigin = 'Anonymous';
       img.onload = () => {
         try {
-          const c = document.createElement('canvas');
-          const ctx = c.getContext('2d');
-          c.width = 64;
-          c.height = 64;
-          ctx.drawImage(img, 0, 0, 64, 64);
-          const data = ctx.getImageData(0, 0, 64, 64).data;
-          
-          let buckets = {};
-
+          const c = document.createElement('canvas'); const ctx = c.getContext('2d');
+          c.width = 64; c.height = 64; ctx.drawImage(img, 0, 0, 64, 64);
+          const data = ctx.getImageData(0, 0, 64, 64).data; let buckets = {};
           for (let i = 0; i < data.length; i += 4) {
-            const r = data[i], g = data[i + 1], b = data[i + 2], a = data[i + 3];
+            const r = data[i], g = data[i+1], b = data[i+2], a = data[i+3];
             if (a < 128) continue;
-
-            const max = Math.max(r, g, b), min = Math.min(r, g, b);
-            const l = (max + min) / 510;
+            const max = Math.max(r,g,b), min = Math.min(r,g,b), l = (max+min)/510;
             if (l < 0.1 || l > 0.9) continue; 
-
-            const qr = Math.round(r / 24) * 24;
-            const qg = Math.round(g / 24) * 24;
-            const qb = Math.round(b / 24) * 24;
-            const key = `${qr},${qg},${qb}`;
-
+            const qr = Math.round(r/24)*24, qg = Math.round(g/24)*24, qb = Math.round(b/24)*24, key = `${qr},${qg},${qb}`;
             if (!buckets[key]) buckets[key] = { r: 0, g: 0, b: 0, count: 0 };
-            buckets[key].r += r; 
-            buckets[key].g += g; 
-            buckets[key].b += b;
-            buckets[key].count++;
+            buckets[key].r += r; buckets[key].g += g; buckets[key].b += b; buckets[key].count++;
           }
-
           const sorted = Object.values(buckets).map(bucket => {
-            const r = bucket.r / bucket.count;
-            const g = bucket.g / bucket.count;
-            const b = bucket.b / bucket.count;
-            
-            const max = Math.max(r, g, b), min = Math.min(r, g, b);
-            const l = (max + min) / 510;
-            const d = max - min;
-            const s = max === min ? 0 : (l > 0.5 ? d / (510 - max - min) : d / (max + min));
-            
-            const score = bucket.count * Math.pow(s + 0.1, 3);
-            return { r, g, b, score };
-          }).sort((a, b) => b.score - a.score);
-
+            const r = bucket.r/bucket.count, g = bucket.g/bucket.count, b = bucket.b/bucket.count;
+            const max = Math.max(r,g,b), min = Math.min(r,g,b), l = (max+min)/510, d = max-min, s = max===min ? 0 : (l>0.5 ? d/(510-max-min) : d/(max+min));
+            return { r, g, b, score: bucket.count * Math.pow(s+0.1, 3) };
+          }).sort((a,b) => b.score - a.score);
           if (sorted.length > 0) {
-            const best = sorted[0];
-            const lum = 0.299 * best.r + 0.587 * best.g + 0.114 * best.b;
-            const factor = lum < 100 ? 100 / (lum || 1) : 1;
-            const uiR = Math.min(255, Math.round(best.r * factor));
-            const uiG = Math.min(255, Math.round(best.g * factor));
-            const uiB = Math.min(255, Math.round(best.b * factor));
-
-            const uiColor = `rgb(${uiR}, ${uiG}, ${uiB})`;
+            const best = sorted[0], lum = 0.299*best.r + 0.587*best.g + 0.114*best.b, factor = lum < 100 ? 100/(lum||1) : 1;
+            const uiColor = `rgb(${Math.min(255, Math.round(best.r*factor))}, ${Math.min(255, Math.round(best.g*factor))}, ${Math.min(255, Math.round(best.b*factor))})`;
             const palette = sorted.slice(0, 5).map(c => `rgba(${Math.round(c.r)}, ${Math.round(c.g)}, ${Math.round(c.b)}, 0.6)`);
-
             res({ palette, uiColor });
-          } else {
-            res({ palette: ['rgba(255, 255, 255, 0.4)'], uiColor: '#ffffff' });
-          }
-        } catch (err) {
-          res({ palette: ['rgba(255, 255, 255, 0.4)'], uiColor: '#ffffff' });
-        }
+          } else res({ palette: ['rgba(255, 255, 255, 0.4)'], uiColor: '#ffffff' });
+        } catch (err) { res({ palette: ['rgba(255, 255, 255, 0.4)'], uiColor: '#ffffff' }); }
       };
-
-      img.onerror = () => {
-        res({ palette: ['rgba(255, 255, 255, 0.4)'], uiColor: '#ffffff' });
-      };
-
+      img.onerror = () => res({ palette: ['rgba(255, 255, 255, 0.4)'], uiColor: '#ffffff' });
       img.src = url.includes('?') ? `${url}&cors=1` : `${url}?cors=1`;
     });
   }
@@ -403,15 +341,27 @@
     els.volumeSlider.style.setProperty('--thumb-color', color);
   }
 
+  // Pre-rendered sprite caching for massive GPU optimization
+  const spriteCache = {};
+  function getSprite(color) {
+    if (spriteCache[color]) return spriteCache[color];
+    const c = document.createElement('canvas'); c.width = 256; c.height = 256;
+    const ctx = c.getContext('2d');
+    const g = ctx.createRadialGradient(128,128,0,128,128,128);
+    g.addColorStop(0, color); g.addColorStop(1, color.replace(/[\d\.]+\)$/, '0)'));
+    ctx.fillStyle = g; ctx.beginPath(); ctx.arc(128,128,128,0,Math.PI*2); ctx.fill();
+    return spriteCache[color] = c;
+  }
+
   class Particle {
     constructor(w, h, c) { this.x = Math.random()*w; this.y = Math.random()*h; this.s = Math.random()*400+200; this.sx = (Math.random()-.5)*.2; this.sy = (Math.random()-.5)*.2; this.c = c; this.o = Math.random()*.5+.3; }
     update(w, h) { this.x += this.sx; this.y += this.sy; if(this.x < -this.s) this.x=w+this.s; if(this.x > w+this.s) this.x=-this.s; if(this.y < -this.s) this.y=h+this.s; if(this.y > h+this.s) this.y=-this.s; }
-    draw(ctx) { const g = ctx.createRadialGradient(this.x, this.y, 0, this.x, this.y, this.s); g.addColorStop(0, this.c.replace('0.6', this.o.toString())); g.addColorStop(1, this.c.replace('0.6', '0')); ctx.fillStyle = g; ctx.beginPath(); ctx.arc(this.x, this.y, this.s, 0, Math.PI*2); ctx.fill(); }
+    draw(ctx) { ctx.globalAlpha = this.o; ctx.drawImage(getSprite(this.c), this.x - this.s, this.y - this.s, this.s * 2, this.s * 2); ctx.globalAlpha = 1; }
   }
 
   function startLiveBackground(p) {
     if (!canvasCtx) setupCanvas();
-    particles = Array.from({length: Math.min(16, Math.floor((window.innerWidth*window.innerHeight)/70000))}, (_,i) => new Particle(window.innerWidth, window.innerHeight, p[i%p.length])); 
+    particles = Array.from({length: Math.min(8, Math.floor((window.innerWidth*window.innerHeight)/150000))}, (_,i) => new Particle(window.innerWidth, window.innerHeight, p[i%p.length])); 
     if (canvasAnimFrame) cancelAnimationFrame(canvasAnimFrame); 
     const anim = () => { canvasCtx.clearRect(0,0,window.innerWidth,window.innerHeight); particles.forEach(pt => { pt.update(window.innerWidth,window.innerHeight); pt.draw(canvasCtx); }); canvasAnimFrame = requestAnimationFrame(anim); }; 
     anim(); els.liveCanvas.classList.add('active'); 
@@ -420,18 +370,15 @@
   function startArtAmbience(p) {
     if (!artAmbienceCtx) setupArtAmbienceCanvas();
     const s = window.innerWidth >= 768 ? 600 : 400;
-    artAmbienceParticles = Array.from({length: 8}, (_,i) => new Particle(s, s, p[i%p.length])); 
+    artAmbienceParticles = Array.from({length: 4}, (_,i) => new Particle(s, s, p[i%p.length])); 
     if (artAmbienceAnimFrame) cancelAnimationFrame(artAmbienceAnimFrame); 
     const anim = () => { artAmbienceCtx.clearRect(0,0,s,s); artAmbienceParticles.forEach(pt => { pt.update(s,s); pt.draw(artAmbienceCtx); }); artAmbienceAnimFrame = requestAnimationFrame(anim); }; 
     anim(); 
   }
 
   function stopFx() { 
-    if (canvasAnimFrame) cancelAnimationFrame(canvasAnimFrame); 
-    if (artAmbienceAnimFrame) cancelAnimationFrame(artAmbienceAnimFrame); 
-    els.liveCanvas.classList.remove('active'); 
-    particles = []; artAmbienceParticles = []; 
-    els.card.style.background = '';
+    if (canvasAnimFrame) cancelAnimationFrame(canvasAnimFrame); if (artAmbienceAnimFrame) cancelAnimationFrame(artAmbienceAnimFrame); 
+    els.liveCanvas.classList.remove('active'); particles = []; artAmbienceParticles = []; els.card.style.background = '';
   }
 
   window.addEventListener('resize', () => { 
@@ -445,99 +392,53 @@
     img.onload = () => { els.bgB.style.backgroundImage = `url('${url}')`; els.bgB.style.opacity = .45; clearTimeout(bgSwapTimer); bgSwapTimer = setTimeout(() => { els.bgA.style.backgroundImage = `url('${url}')`; els.bgB.style.opacity = 0; }, 550); }; img.src = url;
   }
 
-  let lyricsData = [];
-  let currentLyricIdx = -1;
+  let lyricsData = [], currentLyricIdx = -1;
 
   async function fetchLyrics(track, artist) {
     const cleanTrack = track.replace(/\s*\(feat\..*?\)/i, '').replace(/\s*-.*?(Remaster|Mix|Edit)/i, '').trim();
-    const url = `https://lrclib.net/api/get?track_name=${encodeURIComponent(cleanTrack)}&artist_name=${encodeURIComponent(artist)}`;
-    
     try {
-      const res = await fetch(url);
+      const res = await fetch(`https://lrclib.net/api/get?track_name=${encodeURIComponent(cleanTrack)}&artist_name=${encodeURIComponent(artist)}`);
       if (!res.ok) throw new Error('No lyrics');
       const data = await res.json();
-      if (data.syncedLyrics) parseLrc(data.syncedLyrics);
-      else showLyricsError('No synced lyrics available');
-    } catch (e) {
-      showLyricsError('Lyrics not found in public database');
-    }
+      if (data.syncedLyrics) parseLrc(data.syncedLyrics); else showLyricsError('No synced lyrics available');
+    } catch (e) { showLyricsError('Lyrics not found in public database'); }
   }
 
   function parseLrc(lrc) {
     lyricsData = [];
-    const lines = lrc.split('\n');
-    const regex = /\[(\d{2}):(\d{2})\.(\d{2,3})\](.*)/;
-    lines.forEach(line => {
-      const match = regex.exec(line);
-      if (match) {
-        const m = parseInt(match[1], 10), s = parseInt(match[2], 10), ms = match[3].length === 2 ? parseInt(match[3], 10) * 10 : parseInt(match[3], 10);
-        const text = match[4].trim();
-        if (text) lyricsData.push({ time: (m * 60000) + (s * 1000) + ms, text });
-      }
+    lrc.split('\n').forEach(line => {
+      const match = /\[(\d{2}):(\d{2})\.(\d{2,3})\](.*)/.exec(line);
+      if (match && match[4].trim()) lyricsData.push({ time: (parseInt(match[1])*60000) + (parseInt(match[2])*1000) + (match[3].length===2 ? parseInt(match[3])*10 : parseInt(match[3])), text: match[4].trim() });
     });
-    
     if (lyricsData.length) {
       els.lyricsScroll.innerHTML = lyricsData.map((l, i) => `<p id="lyric-${i}" class="lyric-line text-sm sm:text-base lg:text-lg text-neutral-400 opacity-40 blur-[1px] transform origin-center lg:origin-left cursor-default">${l.text}</p>`).join('');
-      currentLyricIdx = -1;
-      if (activeScrollAnim) cancelAnimationFrame(activeScrollAnim);
-      els.lyricsScroll.style.transform = `translateY(0px)`;
-    } else {
-      showLyricsError('Instrumental');
-    }
+      currentLyricIdx = -1; els.lyricsScroll.style.transform = `translateY(0px)`;
+    } else showLyricsError('Instrumental');
   }
 
-  function showLyricsError(msg) {
-    lyricsData = [];
-    if (activeScrollAnim) cancelAnimationFrame(activeScrollAnim);
-    els.lyricsScroll.innerHTML = `<p class="text-neutral-500 text-sm font-medium mt-4">${msg}</p>`;
-    els.lyricsScroll.style.transform = `translateY(0px)`;
-  }
+  function showLyricsError(msg) { lyricsData = []; els.lyricsScroll.innerHTML = `<p class="text-neutral-500 text-sm font-medium mt-4">${msg}</p>`; els.lyricsScroll.style.transform = `translateY(0px)`; }
 
   async function fetchUpNext() {
-    const s = loadSession();
-    if (!s) return;
+    const s = loadSession(); if (!s) return;
     try {
-      const res = await fetch("https://api.spotify.com/v1/me/player/queue", {
-        headers: { Authorization: `Bearer ${s.access_token}` }
-      });
+      const res = await fetch("https://api.spotify.com/v1/me/player/queue", { headers: { Authorization: `Bearer ${s.access_token}` } });
       if (res.ok) {
-        const d = await res.json();
-        // Skip nulls or local files that can offset the queue
-        const next = d.queue?.find(t => t && t.type === 'track');
-        
+        const next = (await res.json()).queue?.find(t => t && t.type === 'track');
         if (next) {
-          els.upNextTitle.textContent = next.name;
-          els.upNextArtist.textContent = next.artists?.map(a => a.name).join(', ') || '—';
+          els.upNextTitle.textContent = next.name; els.upNextArtist.textContent = next.artists?.map(a => a.name).join(', ') || '—';
           els.upNextArt.src = next.album?.images?.[2]?.url || next.album?.images?.[0]?.url || 'https://placehold.co/64x64';
-          els.upNextWrap.classList.remove('opacity-0');
-          els.upNextWrap.classList.add('opacity-100');
-        } else {
-          els.upNextWrap.classList.remove('opacity-100');
-          els.upNextWrap.classList.add('opacity-0');
-        }
+          els.upNextWrap.classList.remove('opacity-0'); els.upNextWrap.classList.add('opacity-100');
+        } else { els.upNextWrap.classList.remove('opacity-100'); els.upNextWrap.classList.add('opacity-0'); }
       }
     } catch (e) {}
   }
 
-  let pollTimer = null, animFrame = null, lastData = null, lastUpdateAt = 0, pollController = null, lastTrackId = null;
-  let isRateLimited = false;
-  let queuePollCounter = 0;
-
-  function stopPolling() { clearInterval(pollTimer); cancelAnimationFrame(animFrame); if (pollController) pollController.abort(); }
+  let pollTimer = null, animFrame = null, lastData = null, pollController = null, lastTrackId = null;
+  let isRateLimited = false, queuePollCounter = 0;
 
   function handleRateLimit(retrySeconds) {
-    if (isRateLimited) return;
-    isRateLimited = true;
-    clearInterval(pollTimer);
-    
-    const waitSeconds = Math.max(retrySeconds || 5, 2);
-    console.warn(`Rate limit encountered. Backing off for ${waitSeconds}s per Spotify Retry-After.`);
-
-    setTimeout(() => {
-      isRateLimited = false;
-      poll();
-      pollTimer = setInterval(poll, currentPollInterval);
-    }, waitSeconds * 1000);
+    if (isRateLimited) return; isRateLimited = true; clearInterval(pollTimer);
+    setTimeout(() => { isRateLimited = false; poll(); if (!document.hidden || lastData?.is_playing) pollTimer = setInterval(poll, currentPollInterval); }, Math.max(retrySeconds || 5, 2) * 1000);
   }
 
   async function poll() {
@@ -547,240 +448,116 @@
       if (pollController) pollController.abort();
       pollController = new AbortController();
       const t0 = performance.now();
-      
-      const res = await fetch("https://api.spotify.com/v1/me/player?additional_types=track", {
-        headers: { Authorization: `Bearer ${loadSession().access_token}` },
-        signal: pollController.signal
-      });
-
-      if (res.status === 429) {
-        const retryHeader = res.headers.get("Retry-After");
-        const retrySec = retryHeader ? parseInt(retryHeader, 10) + 1 : 5;
-        handleRateLimit(retrySec);
-        return;
-      }
-
-      if (res.status === 401 || res.status === 403) {
-        clearSession();
-        return onDisconnected();
-      }
-
+      const res = await fetch("https://api.spotify.com/v1/me/player?additional_types=track", { headers: { Authorization: `Bearer ${loadSession().access_token}` }, signal: pollController.signal });
+      if (res.status === 429) return handleRateLimit(res.headers.get("Retry-After") ? parseInt(res.headers.get("Retry-After")) + 1 : 5);
+      if (res.status === 401 || res.status === 403) { clearSession(); return onDisconnected(); }
       if (res.status === 204) return onNoContent();
-      
-      const lat = (performance.now() - t0) / 2;
-      if (res.ok) {
-        onPlayback(await res.json(), lat);
-      }
-    } catch (e) {} finally { 
-      pollController = null; 
-    }
+      if (res.ok) onPlayback(await res.json(), (performance.now() - t0) / 2);
+    } catch (e) {} finally { pollController = null; }
   }
 
   function onDisconnected() {
-    stopPolling(); stopFx(); els.title.textContent = 'Connect Spotify'; els.artists.textContent = '—';
-    els.elapsed.textContent = '0:00'; els.duration.textContent = '0:00'; els.bar.style.width = '0%'; els.art.src = 'https://placehold.co/600x600/121212/222222?text=Spotify&font=inter';
-    setBG(null); 
-    els.controls.style.display = 'none'; 
-    els.connect.style.display = 'block'; 
-    els.artWrap.dataset.playing = false; showLyricsError('Lyrics will appear here');
-    els.upNextWrap.classList.remove('opacity-100');
-    els.upNextWrap.classList.add('opacity-0');
-    els.bar.style.backgroundColor = ''; els.card.style.background = '';
-    currentUiColor = '#22c55e'; updateVolStyles(0, currentUiColor);
-    releaseWakeLock(); // Release lock when disconnected
+    clearInterval(pollTimer); cancelAnimationFrame(animFrame); stopFx();
+    els.title.textContent = 'Connect Spotify'; els.artists.textContent = '—'; els.elapsed.textContent = '0:00'; els.duration.textContent = '0:00'; els.bar.style.width = '0%'; els.art.src = 'https://placehold.co/600x600/121212/222222?text=Spotify&font=inter';
+    setBG(null); els.controls.style.display = 'none'; els.connect.style.display = 'block'; els.artWrap.dataset.playing = false; showLyricsError('Lyrics will appear here');
+    els.upNextWrap.classList.remove('opacity-100'); els.upNextWrap.classList.add('opacity-0'); els.bar.style.backgroundColor = ''; els.card.style.background = ''; currentUiColor = '#22c55e'; updateVolStyles(0, currentUiColor); releaseWakeLock();
   }
 
   async function api(ep, m='POST') {
     const s = loadSession(); if (!s) return onDisconnected();
     try { 
       const res = await fetch(ep, { method: m, headers: { 'Authorization': `Bearer ${s.access_token}` }});
-      if (res.status === 429) {
-        const retryHeader = res.headers.get("Retry-After");
-        const retrySec = retryHeader ? parseInt(retryHeader, 10) + 1 : 5;
-        handleRateLimit(retrySec);
-        return;
-      }
-      if (res.status === 401) {
-        clearSession();
-        return onDisconnected();
-      }
-      if (res.ok) setTimeout(poll, 300); 
+      if (res.status === 429) return handleRateLimit(res.headers.get("Retry-After") ? parseInt(res.headers.get("Retry-After")) + 1 : 5);
+      if (res.status === 401) { clearSession(); return onDisconnected(); }
+      if (res.ok) { syncTimestamp = performance.now(); setTimeout(poll, 300); }
     } catch (e) {}
   }
 
   function onNoContent() { 
-    els.title.textContent = lastData?.item?.name || 'Nothing playing'; 
-    els.artWrap.dataset.playing = false; 
-    els.connect.style.display = 'none';
-    els.controls.style.display = 'flex';
-    releaseWakeLock();
+    els.title.textContent = lastData?.item?.name || 'Nothing playing'; els.artWrap.dataset.playing = false; els.connect.style.display = 'none'; els.controls.style.display = 'flex'; releaseWakeLock();
+    idlePollCount++; currentPollInterval = Math.min(300000, 7000 * Math.pow(1.5, idlePollCount));
+    clearInterval(pollTimer); if (!document.hidden) pollTimer = setInterval(poll, currentPollInterval);
   }
 
+  let lastDomUpdate = 0;
+
   function onPlayback(d, lat) {
-    els.connect.style.display = 'none';
-    els.controls.style.display = 'flex';
+    els.connect.style.display = 'none'; els.controls.style.display = 'flex';
+    lastData = d; const i = d.item, p = !!d.is_playing, img = i?.album?.images?.[0]?.url || '';
     
-    lastData = d; lastUpdateAt = performance.now();
-    const i = d.item, p = !!d.is_playing, img = i?.album?.images?.[0]?.url || '';
-    
-    // Manage Wake Lock based on playback state
-    if (p) {
-      requestWakeLock();
-    } else {
-      releaseWakeLock();
-    }
-    
-    const expectedInterval = p ? 3000 : 7000;
-    if (currentPollInterval !== expectedInterval) {
-      clearInterval(pollTimer);
-      currentPollInterval = expectedInterval;
-      pollTimer = setInterval(poll, currentPollInterval);
-    }
+    if (p) { idlePollCount = 0; requestWakeLock(); } else { idlePollCount++; currentPollInterval = Math.min(300000, 7000 * Math.pow(1.5, idlePollCount)); releaseWakeLock(); }
     
     const trackChanged = lastTrackId && i?.id && lastTrackId !== i.id;
-    
-    if (trackChanged) { 
-      els.bar.classList.add('reset-animation'); els.bar.style.width = '0%'; setTimeout(() => els.bar.classList.remove('reset-animation'), 400); 
-    }
+    if (trackChanged) { els.bar.classList.add('reset-animation'); els.bar.style.width = '0%'; setTimeout(() => els.bar.classList.remove('reset-animation'), 400); }
     
     if (i?.id && lastTrackId !== i.id) {
-      showLyricsError('Loading lyrics...');
-      fetchLyrics(i.name, i.artists[0].name);
-      setTimeout(fetchUpNext, 1500);
-      queuePollCounter = 0;
+      showLyricsError('Loading lyrics...'); fetchLyrics(i.name, i.artists[0].name); setTimeout(fetchUpNext, 1500); queuePollCounter = 0;
     } else if (p) {
-      queuePollCounter++;
-      if (queuePollCounter >= 5) {
-        fetchUpNext();
-        queuePollCounter = 0;
-      }
+      queuePollCounter++; if (queuePollCounter >= 5) { fetchUpNext(); queuePollCounter = 0; }
     }
     
-    lastTrackId = i?.id;
-
-    els.title.textContent = i ? i.name : '—'; els.artists.textContent = i?.artists?.map(a=>a.name).join(', ') || '—';
+    lastTrackId = i?.id; els.title.textContent = i ? i.name : '—'; els.artists.textContent = i?.artists?.map(a=>a.name).join(', ') || '—';
     
     if (img && els.art.src !== img) { 
       els.art.src = img; setBG(img); 
       extractColors(img).then(res => {
-        currentPalette = res.palette;
-        currentUiColor = res.uiColor;
-        els.bar.style.backgroundColor = currentUiColor;
-        
-        if (d.device?.volume_percent !== null) {
-          updateVolStyles(d.device.volume_percent, currentUiColor);
-        }
-        
+        currentPalette = res.palette; currentUiColor = res.uiColor; els.bar.style.backgroundColor = currentUiColor;
+        if (d.device?.volume_percent !== null) updateVolStyles(d.device.volume_percent, currentUiColor);
         const rgb = res.palette[0].match(/rgba\((\d+),\s*(\d+),\s*(\d+)/);
         if(rgb) els.card.style.background = `linear-gradient(to right, rgba(${rgb[1]}, ${rgb[2]}, ${rgb[3]}, 0.2) 0%, rgba(23, 23, 23, 0.9) 60%, rgba(23, 23, 23, 0.9) 100%)`;
-        
         if (p) { startLiveBackground(res.palette); startArtAmbience(res.palette); }
       });
-    } else if (!img) { 
-      els.art.src = 'https://placehold.co/600x600'; stopFx(); 
-      els.bar.style.backgroundColor = ''; els.card.style.background = '';
-      currentUiColor = '#22c55e';
-    }
-    
-    if (p && img && els.art.src === img && !particles.length && currentPalette) { 
-      startLiveBackground(currentPalette); startArtAmbience(currentPalette); 
-    } else if (!p) stopFx();
+    } else if (!img) { els.art.src = 'https://placehold.co/600x600'; stopFx(); els.bar.style.backgroundColor = ''; els.card.style.background = ''; currentUiColor = '#22c55e'; }
+    if (p && img && els.art.src === img && !particles.length && currentPalette) { startLiveBackground(currentPalette); startArtAmbience(currentPalette); } else if (!p) stopFx();
+    if (d.device?.volume_percent !== null) { els.volumeSlider.value = d.device.volume_percent; updateVolStyles(d.device.volume_percent, currentUiColor); }
 
-    if (d.device?.volume_percent !== null) {
-      els.volumeSlider.value = d.device.volume_percent;
-      updateVolStyles(d.device.volume_percent, currentUiColor);
-    }
+    // Absolute Time Sync
+    const newSyncPos = (d.progress_ms || 0) + (p ? lat : 0);
+    const expectedPos = syncProgressMs + (performance.now() - syncTimestamp);
+    if (trackChanged || !p || Math.abs(expectedPos - newSyncPos) > 3000) { syncProgressMs = newSyncPos; syncTimestamp = performance.now(); }
 
-    let serverPos = (d.progress_ms || 0) + (p ? lat : 0);
-    if (trackChanged || !p || serverPos > localProgressMs || Math.abs(localProgressMs - serverPos) > 2000) {
-      localProgressMs = serverPos;
-    }
-
-    const dur = i?.duration_ms || 0;
-    els.duration.textContent = msToTime(dur); 
-    if (!trackChanged) {
-      els.bar.style.width = dur ? `${(localProgressMs/dur)*100}%` : '0%';
-    }
-    
+    els.duration.textContent = msToTime(i?.duration_ms || 0); 
     els.artWrap.dataset.playing = p; els.playIcon.style.display = p ? 'none' : 'block'; els.pauseIcon.style.display = p ? 'block' : 'none';
 
     cancelAnimationFrame(animFrame);
-    let lastTime = performance.now();
     
     const tick = () => {
       if (!lastData) return;
       const now = performance.now();
-      const delta = now - lastTime;
-      lastTime = now;
-
-      if (lastData.is_playing) {
-        localProgressMs += delta;
-      }
-      
-      let cur = localProgressMs;
+      let cur = lastData.is_playing ? syncProgressMs + (now - syncTimestamp) : syncProgressMs;
       if (cur > (lastData.item?.duration_ms||0)) cur = lastData.item?.duration_ms||0;
       
-      els.elapsed.textContent = msToTime(cur); 
-      els.bar.style.width = `${lastData.item?.duration_ms ? (cur/lastData.item.duration_ms)*100 : 0}%`;
+      // Dynamic Polling Rate Injection
+      if (lastData.is_playing && !document.hidden) {
+        const timeRemaining = (lastData.item?.duration_ms || 0) - cur;
+        const targetInterval = timeRemaining <= 10000 ? 2500 : 12000;
+        if (currentPollInterval !== targetInterval) {
+          currentPollInterval = targetInterval;
+          clearInterval(pollTimer); pollTimer = setInterval(poll, currentPollInterval);
+        }
+      }
+
+      if (now - lastDomUpdate > 100) {
+        els.elapsed.textContent = msToTime(cur); els.bar.style.width = `${lastData.item?.duration_ms ? (cur/lastData.item.duration_ms)*100 : 0}%`; lastDomUpdate = now;
+      }
 
       if (lyricsData.length > 0) {
         let newIdx = -1;
-        for (let j = lyricsData.length - 1; j >= 0; j--) {
-          if (cur >= lyricsData[j].time) { 
-            newIdx = j; 
-            break; 
-          }
-        }
-        
+        for (let j = lyricsData.length - 1; j >= 0; j--) { if (cur >= lyricsData[j].time) { newIdx = j; break; } }
         const isBackwardsJump = newIdx < currentLyricIdx;
         const allowScroll = !isBackwardsJump || (currentLyricIdx !== -1 && cur < lyricsData[currentLyricIdx].time - 2000);
 
         if (newIdx !== currentLyricIdx && newIdx !== -1 && allowScroll) {
           if (currentLyricIdx !== -1) {
             const oldEl = document.getElementById(`lyric-${currentLyricIdx}`);
-            if (oldEl) { 
-              oldEl.classList.remove('text-white', 'opacity-100', 'blur-none', 'scale-105', 'font-bold'); 
-              oldEl.classList.add('text-neutral-400', 'opacity-40', 'blur-[1px]'); 
-            }
+            if (oldEl) { oldEl.classList.remove('text-white', 'opacity-100', 'blur-none', 'scale-105', 'font-bold'); oldEl.classList.add('text-neutral-400', 'opacity-40', 'blur-[1px]'); }
           }
-          currentLyricIdx = newIdx;
-          const newEl = document.getElementById(`lyric-${currentLyricIdx}`);
+          currentLyricIdx = newIdx; const newEl = document.getElementById(`lyric-${currentLyricIdx}`);
           if (newEl) {
-            newEl.classList.remove('text-neutral-400', 'opacity-40', 'blur-[1px]'); 
-            newEl.classList.add('text-white', 'opacity-100', 'blur-none', 'scale-105', 'font-bold');
-            
-            let targetOffset = 0;
-            if (currentLyricIdx > 0) {
-              const prevEl = document.getElementById(`lyric-${currentLyricIdx - 1}`);
-              targetOffset = prevEl ? prevEl.offsetTop - 8 : newEl.offsetTop - 40;
-            }
-            
-            const matrix = window.getComputedStyle(els.lyricsScroll).transform;
-            let currentTransformY = 0;
-            if (matrix && matrix !== 'none') {
-              const values = matrix.split(', ');
-              currentTransformY = Math.abs(parseFloat(values[5]));
-            }
-
-            let scrollStartTime = null;
-            const scrollDuration = 280;
-
-            if (activeScrollAnim) cancelAnimationFrame(activeScrollAnim);
-
-            function animateScroll(timestamp) {
-              if (!scrollStartTime) scrollStartTime = timestamp;
-              const progress = Math.min((timestamp - scrollStartTime) / scrollDuration, 1);
-              const ease = 1 - Math.pow(1 - progress, 3);
-              const interpolatedY = currentTransformY + (targetOffset - currentTransformY) * ease;
-              els.lyricsScroll.style.transform = `translateY(-${interpolatedY}px)`;
-
-              if (progress < 1) {
-                activeScrollAnim = requestAnimationFrame(animateScroll);
-              } else {
-                activeScrollAnim = null;
-              }
-            }
-            activeScrollAnim = requestAnimationFrame(animateScroll);
+            newEl.classList.remove('text-neutral-400', 'opacity-40', 'blur-[1px]'); newEl.classList.add('text-white', 'opacity-100', 'blur-none', 'scale-105', 'font-bold');
+            let targetOffset = currentLyricIdx > 0 ? (document.getElementById(`lyric-${currentLyricIdx - 1}`)?.offsetTop - 8 || newEl.offsetTop - 40) : 0;
+            // Native CSS hardware-accelerated transform 
+            els.lyricsScroll.style.transform = `translateY(-${targetOffset}px)`;
           }
         }
       }
@@ -789,53 +566,30 @@
     trackChanged ? setTimeout(tick, 400) : tick();
   }
 
-  // Handle visibility changes to restore wake lock
   document.addEventListener('visibilitychange', async () => {
     clearInterval(pollTimer);
     if (document.hidden) {
-      pollTimer = setInterval(poll, 15000);
-      wakeLock = null; // Browser automatically releases lock on hidden
+      if (lastData?.is_playing) pollTimer = setInterval(poll, 15000); wakeLock = null; 
     } else {
-      if (lastData?.is_playing) {
-        await requestWakeLock();
-      }
-      poll();
-      pollTimer = setInterval(poll, currentPollInterval);
+      idlePollCount = 0; if (lastData?.is_playing) await requestWakeLock();
+      syncTimestamp = performance.now(); poll(); 
     }
   });
 
   async function boot() {
     setupCanvas(); els.card.classList.add('card-animate');
     const c = new URLSearchParams(location.search).get('code');
-    if (c) { 
-      try { 
-        await exchangeCodeForToken(c); 
-      } catch { 
-        clearSession(); 
-        return onDisconnected(); 
-      } 
-    }
+    if (c) { try { await exchangeCodeForToken(c); } catch { clearSession(); return onDisconnected(); } }
     if (!loadSession()) return onDisconnected(); 
-    
-    els.connect.style.display = 'none';
-    els.controls.style.display = 'flex';
-    
-    poll(); 
-    pollTimer = setInterval(poll, currentPollInterval);
+    els.connect.style.display = 'none'; els.controls.style.display = 'flex'; poll(); 
   }
 
   let volTimer;
-  els.volumeSlider.addEventListener('input', (e) => {
-    updateVolStyles(e.target.value, currentUiColor);
-    clearTimeout(volTimer);
-    volTimer = setTimeout(() => api(`https://api.spotify.com/v1/me/player/volume?volume_percent=${e.target.value}`, 'PUT'), 300);
-  });
-  
+  els.volumeSlider.addEventListener('input', (e) => { updateVolStyles(e.target.value, currentUiColor); clearTimeout(volTimer); volTimer = setTimeout(() => api(`https://api.spotify.com/v1/me/player/volume?volume_percent=${e.target.value}`, 'PUT'), 300); });
   els.fs.addEventListener('click', async () => { try { document.fullscreenElement ? await document.exitFullscreen() : await document.documentElement.requestFullscreen(); } catch (e) {} });
   els.connect.addEventListener('click', beginAuth);
   els.playPauseBtn.addEventListener('click', () => api(lastData?.is_playing ? 'https://api.spotify.com/v1/me/player/pause' : 'https://api.spotify.com/v1/me/player/play', 'PUT'));
   els.nextBtn.addEventListener('click', () => api('https://api.spotify.com/v1/me/player/next')); els.prevBtn.addEventListener('click', () => api('https://api.spotify.com/v1/me/player/previous'));
-
   boot();
   </script>
 </body>
