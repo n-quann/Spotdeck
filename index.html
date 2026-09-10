@@ -283,9 +283,9 @@
   function msToTime(ms) { const s = Math.floor(ms / 1000); return `${Math.floor(s / 60)}:${(s % 60).toString().padStart(2,'0')}`; }
 
   let canvasCtx = null, artAmbienceCtx = null, particles = [], artAmbienceParticles = [], canvasAnimFrame = null, artAmbienceAnimFrame = null;
-  let currentUiColor = '#22c55e', currentPalette = null, currentPollInterval = 12000;
+  let currentUiColor = '#22c55e', currentPalette = null, currentPollInterval = 4000;
   let idlePollCount = 0;
-  let syncProgressMs = 0, syncTimestamp = performance.now(); // Absolute sync vars
+  let syncProgressMs = 0, syncTimestamp = performance.now();
 
   function setupCanvas() {
     const w = window.innerWidth, h = window.innerHeight, d = window.devicePixelRatio || 1;
@@ -341,7 +341,6 @@
     els.volumeSlider.style.setProperty('--thumb-color', color);
   }
 
-  // Pre-rendered sprite caching for massive GPU optimization
   const spriteCache = {};
   function getSprite(color) {
     if (spriteCache[color]) return spriteCache[color];
@@ -485,7 +484,20 @@
     els.connect.style.display = 'none'; els.controls.style.display = 'flex';
     lastData = d; const i = d.item, p = !!d.is_playing, img = i?.album?.images?.[0]?.url || '';
     
-    if (p) { idlePollCount = 0; requestWakeLock(); } else { idlePollCount++; currentPollInterval = Math.min(300000, 7000 * Math.pow(1.5, idlePollCount)); releaseWakeLock(); }
+    if (p) { 
+      idlePollCount = 0; 
+      requestWakeLock(); 
+    } else { 
+      idlePollCount++; 
+      currentPollInterval = Math.min(300000, 7000 * Math.pow(1.5, idlePollCount)); 
+      releaseWakeLock(); 
+    }
+
+    // Explicitly manage the loop based on visibility and playback state
+    clearInterval(pollTimer);
+    if (!document.hidden || p) {
+      pollTimer = setInterval(poll, currentPollInterval);
+    }
     
     const trackChanged = lastTrackId && i?.id && lastTrackId !== i.id;
     if (trackChanged) { els.bar.classList.add('reset-animation'); els.bar.style.width = '0%'; setTimeout(() => els.bar.classList.remove('reset-animation'), 400); }
@@ -511,7 +523,6 @@
     if (p && img && els.art.src === img && !particles.length && currentPalette) { startLiveBackground(currentPalette); startArtAmbience(currentPalette); } else if (!p) stopFx();
     if (d.device?.volume_percent !== null) { els.volumeSlider.value = d.device.volume_percent; updateVolStyles(d.device.volume_percent, currentUiColor); }
 
-    // Absolute Time Sync
     const newSyncPos = (d.progress_ms || 0) + (p ? lat : 0);
     const expectedPos = syncProgressMs + (performance.now() - syncTimestamp);
     if (trackChanged || !p || Math.abs(expectedPos - newSyncPos) > 3000) { syncProgressMs = newSyncPos; syncTimestamp = performance.now(); }
@@ -527,10 +538,9 @@
       let cur = lastData.is_playing ? syncProgressMs + (now - syncTimestamp) : syncProgressMs;
       if (cur > (lastData.item?.duration_ms||0)) cur = lastData.item?.duration_ms||0;
       
-      // Dynamic Polling Rate Injection
       if (lastData.is_playing && !document.hidden) {
         const timeRemaining = (lastData.item?.duration_ms || 0) - cur;
-        const targetInterval = timeRemaining <= 10000 ? 2500 : 12000;
+        const targetInterval = timeRemaining <= 10000 ? 2000 : 4000;
         if (currentPollInterval !== targetInterval) {
           currentPollInterval = targetInterval;
           clearInterval(pollTimer); pollTimer = setInterval(poll, currentPollInterval);
@@ -556,7 +566,6 @@
           if (newEl) {
             newEl.classList.remove('text-neutral-400', 'opacity-40', 'blur-[1px]'); newEl.classList.add('text-white', 'opacity-100', 'blur-none', 'scale-105', 'font-bold');
             let targetOffset = currentLyricIdx > 0 ? (document.getElementById(`lyric-${currentLyricIdx - 1}`)?.offsetTop - 8 || newEl.offsetTop - 40) : 0;
-            // Native CSS hardware-accelerated transform 
             els.lyricsScroll.style.transform = `translateY(-${targetOffset}px)`;
           }
         }
@@ -581,7 +590,9 @@
     const c = new URLSearchParams(location.search).get('code');
     if (c) { try { await exchangeCodeForToken(c); } catch { clearSession(); return onDisconnected(); } }
     if (!loadSession()) return onDisconnected(); 
-    els.connect.style.display = 'none'; els.controls.style.display = 'flex'; poll(); 
+    els.connect.style.display = 'none'; els.controls.style.display = 'flex'; 
+    poll(); 
+    pollTimer = setInterval(poll, currentPollInterval); 
   }
 
   let volTimer;
