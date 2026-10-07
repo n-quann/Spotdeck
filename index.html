@@ -120,6 +120,8 @@
 </head>
 <body class="bg-black text-neutral-100 antialiased overflow-hidden">
 
+  <div id="blackout" class="fixed inset-0 bg-black z-[100] transition-opacity duration-1000 opacity-0 pointer-events-none"></div>
+
   <div class="relative flex h-[100dvh] w-full items-center justify-center">
 
     <canvas id="liveCanvas"></canvas>
@@ -133,12 +135,6 @@
       
       <section id="card" class="relative flex flex-col lg:flex-row items-center gap-4 sm:gap-8 p-5 sm:p-8 w-full max-w-6xl bg-neutral-900/90 backdrop-blur-xl border border-neutral-700/80 rounded-2xl sm:rounded-3xl shadow-2xl opacity-0 z-30">
         
-        <button id="fs" aria-label="Fullscreen" class="absolute bottom-3 right-3 sm:bottom-5 sm:right-5 text-neutral-400 hover:text-white transition-colors p-2 z-40">
-          <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-            <path d="M8 3H5a2 2 0 0 0-2 2v3m18 0V5a2 2 0 0 0-2-2h-3m0 18h3a2 2 0 0 0 2-2v-3M3 16v3a2 2 0 0 0 2 2h3"/>
-          </svg>
-        </button>
-
         <div id="playerHalf" class="flex flex-col landscape:flex-row items-center w-full lg:w-1/2 gap-4 sm:gap-8">
           
           <div class="flex flex-col items-center w-full max-w-[200px] sm:max-w-[240px] landscape:w-1/3 flex-shrink-0 gap-3">
@@ -184,6 +180,11 @@
                   </button>
                   <button id="nextBtn" class="control-btn bg-neutral-800 hover:bg-neutral-700 w-10 h-10 flex items-center justify-center rounded-full text-white">
                     <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polygon points="5 4 15 12 5 20 5 4"/><line x1="19" y1="5" x2="19" y2="19"/></svg>
+                  </button>
+                  <button id="fs" aria-label="Fullscreen" class="control-btn bg-neutral-800 hover:bg-neutral-700 w-10 h-10 flex items-center justify-center rounded-full text-neutral-400 hover:text-white transition-colors">
+                    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                      <path d="M8 3H5a2 2 0 0 0-2 2v3m18 0V5a2 2 0 0 0-2-2h-3m0 18h3a2 2 0 0 0 2-2v-3M3 16v3a2 2 0 0 0 2 2h3"/>
+                    </svg>
                   </button>
                 </div>
                 
@@ -265,6 +266,25 @@
       saveSession(s); return true;
     } catch(e) { return true; }
   }
+
+  let blackoutTimer = null;
+  const blackoutEl = document.getElementById('blackout');
+
+  function updateBlackoutState(isPlaying) {
+    clearTimeout(blackoutTimer);
+    
+    blackoutEl.classList.remove('opacity-100', 'pointer-events-auto');
+    blackoutEl.classList.add('opacity-0', 'pointer-events-none');
+    
+    if (!isPlaying) {
+      blackoutTimer = setTimeout(() => {
+        blackoutEl.classList.remove('opacity-0', 'pointer-events-none');
+        blackoutEl.classList.add('opacity-100', 'pointer-events-auto');
+      }, 300000); 
+    }
+  }
+
+  blackoutEl.addEventListener('click', () => updateBlackoutState(false));
 
   const els = {
     art: document.getElementById('art'), artWrap: document.getElementById('artWrap'), artAmbience: document.getElementById('artAmbience'),
@@ -394,12 +414,10 @@
   let lyricsData = [], currentLyricIdx = -1;
 
   async function fetchLyrics(track, artist) {
-    // Strip all parentheses/brackets and isolate the primary artist
     const cleanTrack = track.replace(/[\(\[].*?[\)\]]/g, '').trim();
     const primaryArtist = artist.split(',')[0].trim();
     
     try {
-      // Attempt 1: Fast exact match lookup
       let res = await fetch(`https://lrclib.net/api/get?track_name=${encodeURIComponent(cleanTrack)}&artist_name=${encodeURIComponent(primaryArtist)}`);
       if (res.ok) {
         const data = await res.json();
@@ -409,12 +427,10 @@
         }
       }
 
-      // Attempt 2: Fuzzy search fallback
       const searchQ = encodeURIComponent(`${cleanTrack} ${primaryArtist}`);
       res = await fetch(`https://lrclib.net/api/search?q=${searchQ}`);
       if (res.ok) {
         const data = await res.json();
-        // Extract the first search result that contains a synced timeline
         const bestMatch = data.find(item => item.syncedLyrics);
         if (bestMatch) {
           parseLrc(bestMatch.syncedLyrics);
@@ -481,6 +497,7 @@
   }
 
   function onDisconnected() {
+    updateBlackoutState(false);
     clearInterval(pollTimer); cancelAnimationFrame(animFrame); stopFx();
     els.title.textContent = 'Connect Spotify'; els.artists.textContent = '—'; els.elapsed.textContent = '0:00'; els.duration.textContent = '0:00'; els.bar.style.width = '0%'; els.art.src = 'https://placehold.co/600x600/121212/222222?text=Spotify&font=inter';
     setBG(null); els.controls.style.display = 'none'; els.connect.style.display = 'block'; els.artWrap.dataset.playing = false; showLyricsError('Lyrics will appear here');
@@ -498,6 +515,7 @@
   }
 
   function onNoContent() { 
+    updateBlackoutState(false);
     els.title.textContent = lastData?.item?.name || 'Nothing playing'; els.artWrap.dataset.playing = false; els.connect.style.display = 'none'; els.controls.style.display = 'flex'; releaseWakeLock();
     idlePollCount++; currentPollInterval = Math.min(300000, 7000 * Math.pow(1.5, idlePollCount));
     clearInterval(pollTimer); if (!document.hidden) pollTimer = setInterval(poll, currentPollInterval);
@@ -509,6 +527,8 @@
     els.connect.style.display = 'none'; els.controls.style.display = 'flex';
     lastData = d; const i = d.item, p = !!d.is_playing, img = i?.album?.images?.[0]?.url || '';
     
+    updateBlackoutState(p);
+
     if (p) { 
       idlePollCount = 0; 
       requestWakeLock(); 
